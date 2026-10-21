@@ -25,13 +25,14 @@ async function searchAnimeCards(req, res) {
 }
 
 /**
- * GET /api/top?limit=10
- * Devuelve los animes más populares
+ * GET /api/top?limit=10&type=tv|movie
+ * Devuelve los animes más populares filtrados opcionalmente por tipo
  */
 async function getTopAnime(req, res) {
   const limit = Math.min(25, Math.max(1, Number(req.query.limit) || 10));
+  const type = req.query.type || null;
   try {
-    const results = await getTopAnimeMetadata(limit);
+    const results = await getTopAnimeMetadata(limit, type);
     res.json(results);
   } catch (error) {
     console.error('Error en getTopAnime:', error.message);

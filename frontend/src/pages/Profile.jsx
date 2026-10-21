@@ -10,7 +10,6 @@ export default function Profile() {
     updateUserName,
     favorites,
     collection,
-    library,
     progress,
     openAuthModal,
     logout,
@@ -22,7 +21,7 @@ export default function Profile() {
   const [nameInput, setNameInput] = useState(user?.name || 'Invitado')
 
   const favCount = Object.keys(favorites).length
-  const colCount = new Set([...Object.keys(collection), ...Object.keys(library)]).size
+  const colCount = Object.keys(collection).length
   const progCount = Object.keys(progress).length
 
   const handleNameChange = (e) => {

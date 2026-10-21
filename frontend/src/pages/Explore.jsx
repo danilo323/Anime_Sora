@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Compass, RotateCcw } from 'lucide-react'
 import { AnimeGrid } from '../components/AnimeCard'
 import { EmptyState, PageHeader, Tabs } from '../components/ui'
-import { ALL_CATALOG, GENRES, sortAnime } from '../data/animeCatalog'
+import { GENRES, sortAnime } from '../data/animeCatalog'
 import { getTopAnime } from '../lib/jikan'
 
 const KIND_TABS = [
@@ -19,14 +19,14 @@ export default function Explore() {
   const sort = params.get('sort') || 'score'
 
   const [remoteAnime, setRemoteAnime] = useState([])
-  const [_loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(false)
 
-  // Opcionalmente enriquece con Jikan si hay conexión
+  // Consulta al backend filtrando por formato (Item 2)
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
     const typeParam = kind === 'movies' ? 'movie' : kind === 'series' ? 'tv' : undefined
-    getTopAnime({ limit: 18, type: typeParam, signal: ctrl.signal })
+    getTopAnime({ limit: 25, type: typeParam, signal: ctrl.signal })
       .then((items) => {
         if (items?.length) setRemoteAnime(items)
       })
@@ -47,25 +47,15 @@ export default function Explore() {
   }
 
   const items = useMemo(() => {
-    // Mezclar catálogo local y remotos únicos
-    const all = [...ALL_CATALOG]
-    const seen = new Set(all.map((a) => String(a.id)))
-    for (const r of remoteAnime) {
-      if (!seen.has(String(r.id))) {
-        all.push(r)
-        seen.add(String(r.id))
-      }
-    }
-
-    const filtered = all.filter((a) => {
+    const filtered = remoteAnime.filter((a) => {
       // Filtro formato
       const isMovie = (a.type || a.kind) === 'Película' || a.type === 'Movie'
       if (kind === 'movies' && !isMovie) return false
       if (kind === 'series' && isMovie) return false
 
-      // Filtro género
+      // Filtro género (Item 1: ahora los géneros coinciden en español)
       if (genre) {
-        const itemGenres = a.genres || [a.g].filter(Boolean)
+        const itemGenres = Array.isArray(a.genres) ? a.genres : [a.g].filter(Boolean)
         const match = itemGenres.some((g) => g.toLowerCase() === genre.toLowerCase())
         if (!match) return false
       }
@@ -127,7 +117,9 @@ export default function Explore() {
 
       <p className="text-xs text-ink-muted">{items.length} títulos encontrados</p>
 
-      {items.length > 0 ? (
+      {loading ? (
+        <AnimeGrid loading={true} skeletons={12} />
+      ) : items.length > 0 ? (
         <AnimeGrid items={items} loading={false} />
       ) : (
         <EmptyState

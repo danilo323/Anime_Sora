@@ -1,6 +1,5 @@
 /**
  * Constantes y utilidades del catálogo Sora Anime
- * (Los 8 animes demo fueron eliminados para usar el catálogo real del backend).
  */
 
 export const GENRES = [
@@ -15,18 +14,6 @@ export const GENRES = [
   'Sobrenatural',
 ]
 
-export const DEFAULT_REVIEWS = [
-  { user: 'Lucía M.', text: 'Una historia preciosa, los paisajes parecen pinturas.', rating: 5, date: 'Hace 3 días' },
-  { user: 'Andrés P.', text: 'La banda sonora me acompañó toda la semana.', rating: 4, date: 'Hace 1 semana' },
-  { user: 'Valeria R.', text: 'El final me dejó pensando varios días.', rating: 5, date: 'Hace 2 semanas' },
-]
-
-export const ALL_CATALOG = []
-
-export function getCatalogAnime(_id) {
-  return null
-}
-
 export function parseViews(viewsStr) {
   if (!viewsStr) return 0
   return parseInt(String(viewsStr).replace(/\./g, '').replace(/,/g, ''), 10) || 0
@@ -40,7 +27,11 @@ export function sortAnime(items = [], sortBy = 'score') {
   if (sortBy === 'az') {
     return arr.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
   }
-  return arr.sort((a, b) => parseFloat(b.score || 0) - parseFloat(a.score || 0))
+  return arr.sort((a, b) => {
+    const scoreA = a.score != null ? Number(a.score) : -1
+    const scoreB = b.score != null ? Number(b.score) : -1
+    return scoreB - scoreA
+  })
 }
 
 export function sceneSvg(_key = 'default') {

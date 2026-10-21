@@ -5,7 +5,6 @@ import axios from 'axios'
 import Logo from './ui/Logo'
 import { useApp, API_BASE } from '../context/AppContext'
 import { useDebounce } from '../hooks'
-import { ALL_CATALOG } from '../data/animeCatalog'
 
 const LINKS = [
   { to: '/', label: 'Inicio', icon: House, end: true },
@@ -166,15 +165,6 @@ function SearchBox() {
       return
     }
 
-    const localMatches = ALL_CATALOG.filter(
-      (a) =>
-        a.title.toLowerCase().includes(term.toLowerCase()) ||
-        a.genres.some((g) => g.toLowerCase().includes(term.toLowerCase())) ||
-        (a.synopsis && a.synopsis.toLowerCase().includes(term.toLowerCase())),
-    ).slice(0, 4)
-
-    setResults(localMatches)
-
     const source = axios.CancelToken.source()
     setLoading(true)
 
@@ -185,13 +175,13 @@ function SearchBox() {
         timeout: 8000,
       })
       .then((res) => {
-        if (Array.isArray(res.data) && res.data.length > 0) {
+        if (Array.isArray(res.data)) {
           setResults(res.data.slice(0, 8))
         }
       })
       .catch((err) => {
         if (!axios.isCancel(err)) {
-          // Si falla backend, mantener localMatches
+          console.warn('Error en búsqueda de Navbar:', err.message)
         }
       })
       .finally(() => setLoading(false))

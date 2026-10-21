@@ -1,18 +1,16 @@
 import { Link } from 'react-router-dom'
 import { Bookmark, Heart, Play } from 'lucide-react'
 import AnimePoster from './ui/AnimePoster'
-import { useApp, episodeList } from '../context/AppContext'
+import { useApp } from '../context/AppContext'
 
 /**
- * Tarjeta de póster (diseño `.pcard`): portada 3:4 con elevación al pasar el
- * ratón, botón de play, indicador de favorito / colección, badge de idioma (SUB/LAT) y metadatos.
+ * Tarjeta de póster: portada 3:4 con elevación al pasar el ratón,
+ * botón de play, indicador de favorito / colección y metadatos limpios.
  */
 export default function AnimeCard({ anime }) {
-  const { isFavorite, isInCollection, toggleCollection, library } = useApp()
+  const { isFavorite, isInCollection, toggleCollection } = useApp()
   const fav = isFavorite(anime.id)
   const inCol = isInCollection(anime.id)
-  const item = library[anime.id]
-  const eps = item ? episodeList(item).length : (anime.episodes || null)
   const genre = anime.genres?.[0] || anime.g
 
   return (
@@ -36,10 +34,10 @@ export default function AnimeCard({ anime }) {
         )}
 
         {/* Indicador de Colección */}
-        {(inCol || item) && (
+        {inCol && (
           <span className="absolute top-2.5 left-2.5 z-[2] flex items-center gap-1 rounded-full bg-brand-600/95 px-2 py-1 text-[11px] font-medium text-white shadow-sm backdrop-blur">
             <Bookmark className="size-3 fill-current" />
-            <span>{item && eps ? `${eps} ep${eps > 1 ? 's' : ''}` : 'Colección'}</span>
+            <span>Colección</span>
           </span>
         )}
 
@@ -68,13 +66,13 @@ export default function AnimeCard({ anime }) {
 
       <b className="mt-3 block truncate text-[14px] font-semibold md:text-[15px]">{anime.title}</b>
       <span className="mt-1 flex items-center justify-between gap-2 text-xs text-ink-muted">
-        <span className="truncate">{[genre, anime.type || anime.kind].filter(Boolean).join(' · ')}</span>
-        {(anime.score || anime.s) && <span className="chip-score flex-none">{anime.score || anime.s}</span>}
+        <span className="truncate">{[genre, anime.type || anime.kind || 'Serie'].filter(Boolean).join(' · ')}</span>
+        <span className="chip-score flex-none">★ {anime.score != null ? anime.score : (anime.s != null ? anime.s : '—')}</span>
       </span>
       <span className="mt-1 block text-xs text-ink-muted">
         {[
-          anime.episodes ? `${anime.episodes} ${anime.episodes === 1 ? 'ep' : 'eps'}` : null,
-          anime.duration || anime.year,
+          anime.episodes ? `${anime.episodes} ${anime.episodes === 1 ? 'ep' : 'eps'}` : 'En emisión',
+          anime.duration || anime.year || '—',
         ]
           .filter(Boolean)
           .join(' · ') || '\u00a0'}

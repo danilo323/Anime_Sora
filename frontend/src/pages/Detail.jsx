@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, Film, Heart, Play, Plus, Star } from 'lucide-react'
+import { ArrowLeft, Check, Film, Heart, Play, Plus } from 'lucide-react'
 import AnimePoster from '../components/ui/AnimePoster'
 import { AnimeGrid } from '../components/AnimeCard'
 import { SectionHeader, Tabs } from '../components/ui'
 import { useApp, episodeList } from '../context/AppContext'
-import { ALL_CATALOG, DEFAULT_REVIEWS, GENRES, getCatalogAnime, sceneSvg } from '../data/animeCatalog'
 import { getAnimeById, getRecommendations } from '../lib/jikan'
 
 const DETAIL_TABS = [
   ['ov', 'Resumen'],
-  ['rev', 'Reseñas'],
   ['eps', 'Episodios'],
 ]
+
+const EPISODES_PER_PAGE = 24
 
 export default function Detail() {
   const { id } = useParams()
@@ -33,8 +33,9 @@ export default function Detail() {
   const [remoteRecs, setRemoteRecs] = useState([])
   const [tab, setTab] = useState('ov')
   const [loading, setLoading] = useState(false)
+  const [epPage, setEpPage] = useState(1)
 
-  // Anime resuelto (state de navegación, colección / caché en memoria o catálogo local / remoto)
+  // Anime resuelto (state de navegación, colección o remoto del backend)
   const anime = useMemo(() => {
     if (passedAnime && String(passedAnime.id) === String(id)) return passedAnime
     return getItemOrCatalog(id) || remoteAnime
@@ -43,15 +44,25 @@ export default function Detail() {
   // Cargar de la API si no viene en state o colección
   useEffect(() => {
     if (passedAnime && String(passedAnime.id) === String(id)) return
+    const ctrl = new AbortController()
     setLoading(true)
-    getAnimeById(id)
+    getAnimeById(id, { signal: ctrl.signal })
       .then((data) => {
         if (data) setRemoteAnime(data)
-        getRecommendations(id).then(setRemoteRecs).catch(() => {})
+        getRecommendations(id, { signal: ctrl.signal })
+          .then(setRemoteRecs)
+          .catch(() => {})
       })
       .catch(() => {})
       .finally(() => setLoading(false))
+
+    return () => ctrl.abort()
   }, [id, passedAnime])
+
+  // Resetear página de episodios si cambia el anime
+  useEffect(() => {
+    setEpPage(1)
+  }, [id])
 
   if (!anime && loading) {
     return (
@@ -80,17 +91,19 @@ export default function Detail() {
   const resumeEp = prog?.episode || 1
   const percent = prog?.duration ? Math.min(100, Math.round((prog.time / prog.duration) * 100)) : 0
 
-  const primaryGenre = anime.genres?.[0] || anime.g || 'Anime'
-  const otherGenres = GENRES.filter((g) => g !== primaryGenre).slice(0, 2)
-  const allGenreChips = [primaryGenre, ...otherGenres]
+  // Muestra SOLO los géneros reales del anime (Item 3)
+  const allGenreChips = Array.isArray(anime.genres) && anime.genres.length > 0
+    ? anime.genres
+    : (anime.g ? [anime.g] : [])
 
   const episodes = episodeList(anime)
+  const totalPages = Math.max(1, Math.ceil(episodes.length / EPISODES_PER_PAGE))
+  const currentEpisodes = episodes.slice(
+    (epPage - 1) * EPISODES_PER_PAGE,
+    epPage * EPISODES_PER_PAGE,
+  )
 
-  // Recomendados
-  const moreLikeThis =
-    remoteRecs.length > 0
-      ? remoteRecs.slice(0, 6)
-      : ALL_CATALOG.filter((a) => String(a.id) !== String(anime.id)).slice(0, 6)
+  const moreLikeThis = remoteRecs.slice(0, 6)
 
   const handlePlay = (ep = resumeEp) => {
     play(anime, ep)
@@ -107,21 +120,23 @@ export default function Detail() {
           <ArrowLeft className="size-4" />
           Volver
         </button>
-        <div className="flex flex-wrap gap-2">
-          {allGenreChips.map((g, i) => (
-            <Link
-              key={g}
-              to={`/explorar?genre=${encodeURIComponent(g)}`}
-              className={`rounded-full px-4 py-1.5 text-xs font-medium transition ${
-                i === 0
-                  ? 'bg-brand-600 text-white shadow-sm'
-                  : 'bg-surface-0 text-ink ring-[1.5px] ring-brand-100 ring-inset hover:ring-brand-400'
-              }`}
-            >
-              {g}
-            </Link>
-          ))}
-        </div>
+        {allGenreChips.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {allGenreChips.map((g, i) => (
+              <Link
+                key={g}
+                to={`/explorar?genre=${encodeURIComponent(g)}`}
+                className={`rounded-full px-4 py-1.5 text-xs font-medium transition ${
+                  i === 0
+                    ? 'bg-brand-600 text-white shadow-sm'
+                    : 'bg-surface-0 text-ink ring-[1.5px] ring-brand-100 ring-inset hover:ring-brand-400'
+                }`}
+              >
+                {g}
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Grid de 2 columnas: Vista previa / pestañas a la izquierda, Ficha a la derecha */}
@@ -130,122 +145,110 @@ export default function Detail() {
         <div className="flex flex-col gap-6">
           {/* Banner 16:9 con botón central de reproducción */}
           <div className="group relative aspect-video w-full overflow-hidden rounded-[22px] bg-navy-900 shadow-card">
-            {anime.trailerImage || anime.image ? (
+            {anime.trailerImage || anime.image || anime.poster ? (
               <img
-                src={anime.trailerImage || anime.image}
+                src={anime.trailerImage || anime.image || anime.poster}
                 alt={anime.title}
                 className="size-full object-cover transition duration-500 group-hover:scale-105"
               />
             ) : (
-              <div
-                className="size-full transition duration-500 group-hover:scale-105"
-                dangerouslySetInnerHTML={{ __html: sceneSvg(anime.sc || 'bienvenida') }}
-              />
+              <div className="grid size-full place-items-center text-ink-muted">
+                <Film className="size-16 stroke-1 opacity-40" />
+              </div>
             )}
-            <div className="absolute inset-0 bg-navy-900/35 transition group-hover:bg-navy-900/20" />
+            <div className="absolute inset-0 bg-gradient-to-t from-navy-900/80 via-transparent to-black/20" />
 
-            {/* Gran botón Play circular */}
             <button
               onClick={() => handlePlay(resumeEp)}
-              aria-label="Reproducir"
-              className="absolute inset-0 m-auto grid size-20 place-items-center rounded-full bg-white/95 text-brand-600 shadow-2xl transition duration-200 hover:scale-110 active:scale-95"
+              aria-label="Reproducir ahora"
+              className="absolute inset-0 grid place-items-center group-hover:bg-navy-900/10 transition"
             >
-              <Play className="ml-1 size-8 fill-current" />
+              <span className="grid size-16 place-items-center rounded-full bg-white/95 text-brand-600 shadow-2xl transition duration-300 group-hover:scale-110 group-hover:bg-white md:size-20">
+                <Play className="ml-1 size-7 fill-current md:size-9" />
+              </span>
             </button>
 
-            {/* Barra de progreso si ya se empezó a ver */}
+            {/* Barra de progreso si ya empezó */}
             {percent > 0 && (
-              <div className="absolute inset-x-6 bottom-4 h-1.5 overflow-hidden rounded-full bg-white/40">
-                <div className="h-full rounded-full bg-brand-400" style={{ width: `${percent}%` }} />
+              <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/20">
+                <div className="h-full bg-brand-500 transition-all" style={{ width: `${percent}%` }} />
               </div>
             )}
           </div>
 
-          {/* Pestañas: Resumen | Reseñas | Episodios */}
-          <div className="border-b border-brand-100">
-            <Tabs items={DETAIL_TABS} value={tab} onChange={setTab} />
-          </div>
+          {/* Pestañas de contenido */}
+          <Tabs items={DETAIL_TABS} value={tab} onChange={setTab} />
 
-          {/* Contenido de la pestaña activa */}
           {tab === 'ov' && (
-            <div className="flex flex-col gap-6">
-              <p className="text-base leading-relaxed text-ink-soft">
-                {anime.synopsis || 'Sin descripción disponible para este título.'}
+            <div className="space-y-4 rounded-[18px] bg-surface-0 p-6 shadow-sm">
+              <h2 className="text-base font-semibold text-ink">Sinopsis</h2>
+              <p className="whitespace-pre-line text-sm leading-relaxed text-ink-soft">
+                {anime.synopsis || 'Sinopsis no disponible.'}
               </p>
-
-              {/* Ficha técnica en tarjetas cuadradas */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-[14px] bg-surface-0 p-4 shadow-sm">
-                  <span className="block text-xs text-ink-muted">Género</span>
-                  <b className="mt-1 block truncate text-sm font-semibold">{primaryGenre}</b>
+              {anime.originalTitle && (
+                <div className="border-t border-brand-100/60 pt-4 text-xs text-ink-muted">
+                  <span className="font-semibold text-ink">Título original:</span> {anime.originalTitle}
                 </div>
-                <div className="rounded-[14px] bg-surface-0 p-4 shadow-sm">
-                  <span className="block text-xs text-ink-muted">Formato</span>
-                  <b className="mt-1 block truncate text-sm font-semibold">{anime.type || anime.kind || 'TV'}</b>
-                </div>
-                <div className="rounded-[14px] bg-surface-0 p-4 shadow-sm">
-                  <span className="block text-xs text-ink-muted">Duración</span>
-                  <b className="mt-1 block truncate text-sm font-semibold">{anime.duration || '24 min'}</b>
-                </div>
-                <div className="rounded-[14px] bg-surface-0 p-4 shadow-sm">
-                  <span className="block text-xs text-ink-muted">Puntuación</span>
-                  <b className="mt-1 block truncate text-sm font-semibold text-brand-600">
-                    {anime.score || anime.s || '8.5'} / 10
-                  </b>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {tab === 'rev' && (
-            <div className="flex flex-col gap-4">
-              {DEFAULT_REVIEWS.map((r, i) => (
-                <div key={i} className="flex gap-4 rounded-[14px] bg-surface-0 p-4 shadow-sm">
-                  <div className="grid size-10 flex-none place-items-center rounded-full bg-brand-100 text-sm font-bold text-brand-700">
-                    {r.user.charAt(0)}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <b className="text-sm font-semibold">{r.user}</b>
-                      <div className="flex items-center text-star">
-                        {Array.from({ length: r.rating }).map((_, si) => (
-                          <Star key={si} className="size-3.5 fill-current" />
-                        ))}
-                      </div>
-                    </div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-ink-soft">{r.text}</p>
-                    <small className="mt-2 block text-xs text-ink-muted">{r.date}</small>
-                  </div>
-                </div>
-              ))}
+              )}
             </div>
           )}
 
           {tab === 'eps' && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {episodes.map((epNum) => (
-                <button
-                  key={epNum}
-                  onClick={() => handlePlay(epNum)}
-                  className="group flex items-center gap-3 rounded-[14px] bg-surface-0 p-2.5 text-left shadow-sm transition hover:shadow-card"
-                >
-                  <div className="relative aspect-video w-[90px] flex-none overflow-hidden rounded-lg bg-brand-100">
-                    <AnimePoster anime={anime} />
-                    <span className="absolute inset-0 grid place-items-center bg-navy-900/25 transition group-hover:bg-navy-900/10">
-                      <Play className="size-4 fill-white text-white drop-shadow" />
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {currentEpisodes.map((epNum) => (
+                  <button
+                    key={epNum}
+                    onClick={() => handlePlay(epNum)}
+                    className="group flex items-center gap-3 rounded-[14px] bg-surface-0 p-2.5 text-left shadow-sm transition hover:shadow-card"
+                  >
+                    <div className="relative aspect-video w-[90px] flex-none overflow-hidden rounded-lg bg-brand-100">
+                      <AnimePoster anime={anime} />
+                      <span className="absolute inset-0 grid place-items-center bg-navy-900/25 transition group-hover:bg-navy-900/10">
+                        <Play className="size-4 fill-white text-white drop-shadow" />
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <b className="block truncate text-sm font-semibold group-hover:text-brand-600">
+                        Episodio {epNum}
+                      </b>
+                      <small className="text-xs text-ink-muted">{anime.duration || '24 min'}</small>
+                    </div>
+                    <span className="grid size-8 flex-none place-items-center rounded-full bg-brand-600 text-white transition group-hover:bg-brand-700">
+                      <Play className="ml-0.5 size-3.5 fill-current" />
                     </span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <b className="block truncate text-sm font-semibold group-hover:text-brand-600">
-                      Episodio {epNum}
-                    </b>
-                    <small className="text-xs text-ink-muted">{anime.duration || '24 min'}</small>
-                  </div>
-                  <span className="grid size-8 flex-none place-items-center rounded-full bg-brand-600 text-white transition group-hover:bg-brand-700">
-                    <Play className="ml-0.5 size-3.5 fill-current" />
+                  </button>
+                ))}
+              </div>
+
+              {/* Paginación de episodios si superan el tamaño de página (Item 6) */}
+              {totalPages > 1 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] bg-surface-0 px-4 py-3 shadow-sm text-xs font-medium text-ink-muted">
+                  <span>
+                    Episodios {(epPage - 1) * EPISODES_PER_PAGE + 1} -{' '}
+                    {Math.min(epPage * EPISODES_PER_PAGE, episodes.length)} de {episodes.length}
                   </span>
-                </button>
-              ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setEpPage((p) => Math.max(1, p - 1))}
+                      disabled={epPage === 1}
+                      className="btn btn-outline btn-sm !px-3 !py-1 text-xs disabled:opacity-30"
+                    >
+                      Anterior
+                    </button>
+                    <span className="px-2 font-semibold text-ink">
+                      {epPage} / {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setEpPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={epPage === totalPages}
+                      className="btn btn-outline btn-sm !px-3 !py-1 text-xs disabled:opacity-30"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -260,17 +263,18 @@ export default function Detail() {
             {anime.title}
           </h1>
 
+          {/* Formateo de episodios y año seguro (Item 4) */}
           <div className="mt-1.5 flex items-center justify-center gap-2 text-xs text-ink-muted">
-            <span>{anime.episodes || episodes.length} episodios</span>
+            <span>{anime.episodes ? `${anime.episodes} episodios` : 'En emisión'}</span>
             <span>·</span>
-            <span>{anime.views ? `${anime.views} vistas` : `${anime.year || '2024'}`}</span>
+            <span>{anime.views ? `${anime.views} vistas` : (anime.year || '—')}</span>
           </div>
 
-          {/* Chips de formato, favorito y puntuación */}
+          {/* Chips de formato, favorito y puntuación (Item 4) */}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <span className="chip-score !bg-brand-100 !text-brand-700 flex items-center gap-1.5">
               <Film className="size-3.5" />
-              {anime.type || anime.kind || 'Película'}
+              {anime.type || anime.kind || 'Serie'}
             </span>
             <button
               onClick={() => toggleFavorite(anime)}
@@ -284,7 +288,7 @@ export default function Detail() {
               Favorito
             </button>
             <span className="chip-score !bg-star/15 !text-amber-700 font-bold">
-              ★ {anime.score || anime.s || '9.0'}
+              ★ {anime.score != null ? anime.score : '—'}
             </span>
           </div>
 
@@ -310,10 +314,12 @@ export default function Detail() {
       </div>
 
       {/* También te puede gustar */}
-      <section className="mt-8 border-t border-brand-100/70 pt-8">
-        <SectionHeader title="También te puede gustar" />
-        <AnimeGrid items={moreLikeThis} loading={false} />
-      </section>
+      {moreLikeThis.length > 0 && (
+        <section className="mt-8 border-t border-brand-100/70 pt-8">
+          <SectionHeader title="También te puede gustar" />
+          <AnimeGrid items={moreLikeThis} loading={false} />
+        </section>
+      )}
     </div>
   )
 }

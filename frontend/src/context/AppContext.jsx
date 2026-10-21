@@ -1,13 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { useLocalStorage } from '../hooks'
-import { getCatalogAnime } from '../data/animeCatalog'
 
 export const API_BASE = 'http://localhost:4000/api'
 
 /**
  * Estado global de Sora Anime:
- *  - library:    animes con servidores HLS personalizados por episodio
  *  - collection: animes guardados en "Mi colección" (sincronizados con backend /api/vault)
  *  - favorites:  animes marcados con ♥
  *  - progress:   último episodio y segundo visto por anime
@@ -16,10 +14,7 @@ export const API_BASE = 'http://localhost:4000/api'
  */
 const AppContext = createContext(null)
 
-const uid = () => Math.random().toString(36).slice(2, 9)
-
 export function AppProvider({ children }) {
-  const [library, setLibrary] = useLocalStorage('library', {})
   const [collection, setCollection] = useLocalStorage('col', {})
   const [favorites, setFavorites] = useLocalStorage('fav', {})
   const [progress, setProgress] = useLocalStorage('progress', {})
@@ -59,7 +54,7 @@ export function AppProvider({ children }) {
         setCollection((prev) => ({ ...prev, ...map }))
       })
       .catch((err) => {
-        // Si el backend no está corriendo aún, usamos la caché local de localStorage
+        // Si el backend no está disponible, usamos la colección local de localStorage
         console.warn('Backend vault no disponible aún, usando colección local:', err.message)
       })
 
@@ -102,45 +97,34 @@ export function AppProvider({ children }) {
         isGuest: false,
         google: false,
       })
-      setAuthModal(null)
-      toast(`¡Bienvenido de nuevo, ${capitalized}!`)
+      toast(`¡Bienvenido de vuelta, ${capitalized || 'Usuario'}!`)
     },
     [setUser, toast],
   )
 
   const register = useCallback(
     (name, email, _password) => {
-      const cleanEmail = email.trim()
-      const cleanName = name.trim() || cleanEmail.split('@')[0]
-      const capitalized = cleanName.charAt(0).toUpperCase() + cleanName.slice(1)
+      const cleanName = name.trim() || email.split('@')[0]
       setUser({
-        name: capitalized,
-        email: cleanEmail,
+        name: cleanName,
+        email: email.trim(),
         isGuest: false,
         google: false,
       })
-      setAuthModal(null)
-      toast(`Cuenta creada. ¡Bienvenido a Sora Anime, ${capitalized}!`)
+      toast(`¡Cuenta creada! Hola, ${cleanName}`)
     },
     [setUser, toast],
   )
 
-  const loginWithGoogle = useCallback(
-    (email = 'usuario@gmail.com') => {
-      const cleanEmail = email.trim() || 'usuario@gmail.com'
-      const fallbackName = cleanEmail.split('@')[0]
-      const capitalized = fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1)
-      setUser({
-        name: capitalized,
-        email: cleanEmail,
-        isGuest: false,
-        google: true,
-      })
-      setAuthModal(null)
-      toast(`Sesión iniciada con Google como ${capitalized}`)
-    },
-    [setUser, toast],
-  )
+  const loginWithGoogle = useCallback(() => {
+    setUser({
+      name: 'Usuario Google',
+      email: 'usuario@gmail.com',
+      isGuest: false,
+      google: true,
+    })
+    toast('Sesión iniciada con Google')
+  }, [setUser, toast])
 
   const logout = useCallback(() => {
     setUser({
@@ -151,44 +135,6 @@ export function AppProvider({ children }) {
     })
     toast('Cerraste sesión. Sigues en modo invitado.')
   }, [setUser, toast])
-
-  /** Añade (o fusiona) un anime con los servidores de un episodio. */
-  const addToLibrary = useCallback(
-    (anime, episode, servers = []) => {
-      const clean = servers
-        .filter((s) => s.url?.trim())
-        .map((s, i) => ({ id: s.id || uid(), name: s.name?.trim() || `Servidor ${i + 1}`, url: s.url.trim() }))
-      setLibrary((lib) => {
-        const prev = lib[anime.id]
-        const streams = { ...(prev?.streams || {}) }
-        if (episode && clean.length) streams[episode] = clean
-        return { ...lib, [anime.id]: { ...prev, ...anime, addedAt: prev?.addedAt || Date.now(), streams } }
-      })
-      toast(`“${anime.title}” guardado en tu colección`)
-    },
-    [setLibrary, toast],
-  )
-
-  const removeFromLibrary = useCallback(
-    (id) =>
-      setLibrary((lib) => {
-        const next = { ...lib }
-        delete next[id]
-        return next
-      }),
-    [setLibrary],
-  )
-
-  const removeEpisode = useCallback(
-    (id, episode) =>
-      setLibrary((lib) => {
-        if (!lib[id]) return lib
-        const streams = { ...lib[id].streams }
-        delete streams[episode]
-        return { ...lib, [id]: { ...lib[id], streams } }
-      }),
-    [setLibrary],
-  )
 
   const toggleFavorite = useCallback(
     (anime) => {
@@ -222,12 +168,12 @@ export function AppProvider({ children }) {
         slug: anime.slug || '',
         poster: anime.poster || anime.image || '',
         image: anime.image || anime.poster || '',
-        score: anime.score || anime.s || 8.5,
+        score: anime.score != null ? Number(anime.score) : null,
         type: anime.type || anime.kind || 'Serie',
-        genres: anime.genres || (anime.g ? [anime.g] : ['Anime']),
+        genres: anime.genres || (anime.g ? [anime.g] : []),
         synopsis: anime.synopsis || anime.syn || 'Sinopsis no disponible.',
-        episodes: anime.episodes || anime.eps || 12,
-        year: anime.year || 2024,
+        episodes: anime.episodes != null ? Number(anime.episodes) : null,
+        year: anime.year != null ? Number(anime.year) : null,
         colAt: Date.now(),
       }
 
@@ -266,12 +212,11 @@ export function AppProvider({ children }) {
     setFavorites({})
     setCollection({})
     setProgress({})
-    setLibrary({})
     if (user.isGuest) {
       setUser({ name: 'Invitado', email: '', isGuest: true, google: false })
     }
     toast('Todos los datos locales han sido borrados.')
-  }, [setFavorites, setCollection, setProgress, setLibrary, setUser, user.isGuest, toast])
+  }, [setFavorites, setCollection, setProgress, setUser, user.isGuest, toast])
 
   const play = useCallback((animeOrId, episode = 1) => {
     if (typeof animeOrId === 'object' && animeOrId !== null) {
@@ -289,14 +234,13 @@ export function AppProvider({ children }) {
       if (activeAnimeItem && String(activeAnimeItem.id) === strId) {
         return activeAnimeItem
       }
-      return collection[strId] || library[strId] || getCatalogAnime(strId) || null
+      return collection[strId] || null
     },
-    [activeAnimeItem, collection, library],
+    [activeAnimeItem, collection],
   )
 
   const value = useMemo(
     () => ({
-      library,
       collection,
       favorites,
       progress,
@@ -313,15 +257,12 @@ export function AppProvider({ children }) {
       register,
       loginWithGoogle,
       logout,
-      addToLibrary,
-      removeFromLibrary,
-      removeEpisode,
       toggleFavorite,
       toggleCollection,
       saveProgress,
       resetAllData,
       isFavorite: (id) => Boolean(favorites[String(id)]),
-      isInCollection: (id) => Boolean(collection[String(id)] || library[String(id)]),
+      isInCollection: (id) => Boolean(collection[String(id)]),
       openAddModal: (anime = null, episode = null) => setAddModal({ anime, episode }),
       closeAddModal: () => setAddModal(null),
       openAuthModal: (mode = 'login') => setAuthModal(mode),
@@ -331,7 +272,6 @@ export function AppProvider({ children }) {
       getItemOrCatalog,
     }),
     [
-      library,
       collection,
       favorites,
       progress,
@@ -348,9 +288,6 @@ export function AppProvider({ children }) {
       register,
       loginWithGoogle,
       logout,
-      addToLibrary,
-      removeFromLibrary,
-      removeEpisode,
       toggleFavorite,
       toggleCollection,
       saveProgress,
@@ -370,17 +307,10 @@ export function useApp() {
   return ctx
 }
 
-/** Episodios con stream de un anime de la colección, ordenados. */
+/** Episodios ordenados de un anime (sin límite artificial de 24). */
 // eslint-disable-next-line react-refresh/only-export-components
 export function episodeList(item) {
   if (!item) return []
-  if (item.streams) {
-    const eps = Object.keys(item.streams)
-      .map(Number)
-      .filter((n) => Number.isFinite(n) && n > 0)
-      .sort((a, b) => a - b)
-    if (eps.length) return eps
-  }
-  const count = item.episodes || 1
-  return Array.from({ length: Math.min(count, 24) }, (_, i) => i + 1)
+  const count = item.episodes ? Math.max(1, Number(item.episodes) || 1) : 1
+  return Array.from({ length: count }, (_, i) => i + 1)
 }

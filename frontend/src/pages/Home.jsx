@@ -22,7 +22,7 @@ export default function Home() {
   const navigate = useNavigate()
   const { progress, play, getItemOrCatalog, collection } = useApp()
   const [remoteTop, setRemoteTop] = useState([])
-  const [_loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   const vaultItems = useMemo(() => {
     return Object.values(collection || {}).filter(Boolean)
@@ -74,7 +74,7 @@ export default function Home() {
   return (
     <div className="flex flex-col gap-8 pb-12 md:gap-12">
       {/* Carrusel Hero */}
-      <Hero items={heroItems} loading={false} />
+      <Hero items={heroItems} loading={loading && !heroItems.length} />
 
       {/* Seguir viendo (si hay episodios empezados) */}
       {continueWatching.length > 0 && (
@@ -122,10 +122,10 @@ export default function Home() {
       )}
 
       {/* Top anime */}
-      {topList.length > 0 && (
+      {(topList.length > 0 || loading) && (
         <section>
           <SectionHeader title="Top anime" to="/explorar?sort=score" action="Ver más" />
-          <AnimeGrid items={topList} loading={false} />
+          <AnimeGrid items={topList} loading={loading && !topList.length} />
         </section>
       )}
 

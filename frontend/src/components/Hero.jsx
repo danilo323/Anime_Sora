@@ -10,7 +10,7 @@ import AnimePoster from './ui/AnimePoster'
 export default function Hero({ items = [], loading }) {
   const [i, setI] = useState(0)
   const [paused, setPaused] = useState(false)
-  const { library, progress, isFavorite, toggleFavorite, play } = useApp()
+  const { progress, isFavorite, toggleFavorite, play } = useApp()
 
   useEffect(() => {
     if (paused || items.length < 2) return
@@ -25,12 +25,12 @@ export default function Hero({ items = [], loading }) {
   }
 
   const a = items[i % items.length]
-  const eps = episodeList(library[a.id] || a)
+  const eps = episodeList(a)
   const resumeEp = progress[a.id]?.episode
   const fav = isFavorite(a.id)
 
   const watch = () => {
-    play(a.id, resumeEp || (eps[0] || 1))
+    play(a, resumeEp || (eps[0] || 1))
   }
 
   return (
@@ -82,11 +82,11 @@ export default function Hero({ items = [], loading }) {
           {a.title || a.t}
         </h1>
         <div className="flex flex-wrap items-center gap-2.5 text-xs opacity-90 md:text-[13px]">
-          {(a.score || a.s) && <span className="chip-score">{a.score || a.s}</span>}
+          <span className="chip-score">★ {a.score != null ? a.score : (a.s != null ? a.s : '—')}</span>
           {[
-            a.type || a.kind,
-            (a.episodes || a.eps) && `${a.episodes || a.eps} ${a.episodes === 1 || a.eps === 1 ? 'ep' : 'eps'}`,
-            a.duration || a.year,
+            a.type || a.kind || 'Serie',
+            a.episodes ? `${a.episodes} ${a.episodes === 1 ? 'ep' : 'eps'}` : 'En emisión',
+            a.duration || a.year || '—',
             a.views ? `${a.views} vistas` : a.members ? `${formatMembers(a.members)} miembros` : null,
           ]
             .filter(Boolean)
