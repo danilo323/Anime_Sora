@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, Film, Heart, Play, Plus } from 'lucide-react'
+import { ArrowLeft, Check, Film, Heart, Play, Plus, Search } from 'lucide-react'
 import AnimePoster from '../components/ui/AnimePoster'
 import { AnimeGrid } from '../components/AnimeCard'
 import { SectionHeader, Tabs } from '../components/ui'
@@ -8,8 +8,8 @@ import { useApp, episodeList } from '../context/AppContext'
 import { getAnimeById, getRecommendations } from '../lib/jikan'
 
 const DETAIL_TABS = [
-  ['ov', 'Resumen'],
   ['eps', 'Episodios'],
+  ['ov', 'Resumen / Sinopsis'],
 ]
 
 const EPISODES_PER_PAGE = 24
@@ -31,9 +31,10 @@ export default function Detail() {
 
   const [remoteAnime, setRemoteAnime] = useState(null)
   const [remoteRecs, setRemoteRecs] = useState([])
-  const [tab, setTab] = useState('ov')
+  const [tab, setTab] = useState('eps')
   const [loading, setLoading] = useState(false)
   const [epPage, setEpPage] = useState(1)
+  const [epSearch, setEpSearch] = useState('')
 
   // Anime resuelto (state de navegación, colección o remoto del backend)
   const anime = useMemo(() => {
@@ -97,8 +98,17 @@ export default function Detail() {
     : (anime.g ? [anime.g] : [])
 
   const episodes = episodeList(anime)
-  const totalPages = Math.max(1, Math.ceil(episodes.length / EPISODES_PER_PAGE))
-  const currentEpisodes = episodes.slice(
+  const filteredEpisodes = useMemo(() => {
+    const q = epSearch.trim().toLowerCase()
+    if (!q) return episodes
+    return episodes.filter((n) => {
+      const s = String(n)
+      return s.includes(q) || `episodio ${s}`.includes(q)
+    })
+  }, [episodes, epSearch])
+
+  const totalPages = Math.max(1, Math.ceil(filteredEpisodes.length / EPISODES_PER_PAGE))
+  const currentEpisodes = filteredEpisodes.slice(
     (epPage - 1) * EPISODES_PER_PAGE,
     epPage * EPISODES_PER_PAGE,
   )
@@ -195,31 +205,69 @@ export default function Detail() {
 
           {tab === 'eps' && (
             <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {currentEpisodes.map((epNum) => (
-                  <button
-                    key={epNum}
-                    onClick={() => handlePlay(epNum)}
-                    className="group flex items-center gap-3 rounded-[14px] bg-surface-0 p-2.5 text-left shadow-sm transition hover:shadow-card"
-                  >
-                    <div className="relative aspect-video w-[90px] flex-none overflow-hidden rounded-lg bg-brand-100">
-                      <AnimePoster anime={anime} />
-                      <span className="absolute inset-0 grid place-items-center bg-navy-900/25 transition group-hover:bg-navy-900/10">
-                        <Play className="size-4 fill-white text-white drop-shadow" />
-                      </span>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <b className="block truncate text-sm font-semibold group-hover:text-brand-600">
-                        Episodio {epNum}
-                      </b>
-                      <small className="text-xs text-ink-muted">{anime.duration || '24 min'}</small>
-                    </div>
-                    <span className="grid size-8 flex-none place-items-center rounded-full bg-brand-600 text-white transition group-hover:bg-brand-700">
-                      <Play className="ml-0.5 size-3.5 fill-current" />
-                    </span>
-                  </button>
-                ))}
+              {/* Barra superior de episodios con buscador */}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[16px] bg-surface-0 px-4 py-3 shadow-sm">
+                <span className="text-sm font-semibold text-ink">
+                  Episodios disponibles ({filteredEpisodes.length}
+                  {filteredEpisodes.length !== episodes.length ? ` de ${episodes.length}` : ''})
+                </span>
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-muted" />
+                  <input
+                    type="text"
+                    placeholder="Filtrar por número..."
+                    value={epSearch}
+                    onChange={(e) => {
+                      setEpSearch(e.target.value)
+                      setEpPage(1)
+                    }}
+                    className="w-full rounded-lg bg-surface-100 py-1.5 pl-8 pr-7 text-xs text-ink placeholder-ink-muted outline-none ring-1 ring-brand-100 focus:ring-2 focus:ring-brand-500"
+                  />
+                  {epSearch && (
+                    <button
+                      onClick={() => {
+                        setEpSearch('')
+                        setEpPage(1)
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink text-xs font-bold"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {currentEpisodes.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {currentEpisodes.map((epNum) => (
+                    <button
+                      key={epNum}
+                      onClick={() => handlePlay(epNum)}
+                      className="group flex items-center gap-3 rounded-[14px] bg-surface-0 p-2.5 text-left shadow-sm transition hover:shadow-card hover:ring-1 hover:ring-brand-400"
+                    >
+                      <div className="relative aspect-video w-[90px] flex-none overflow-hidden rounded-lg bg-brand-100">
+                        <AnimePoster anime={anime} />
+                        <span className="absolute inset-0 grid place-items-center bg-navy-900/25 transition group-hover:bg-navy-900/10">
+                          <Play className="size-4 fill-white text-white drop-shadow" />
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <b className="block truncate text-sm font-semibold group-hover:text-brand-600">
+                          Episodio {epNum}
+                        </b>
+                        <small className="text-xs text-ink-muted">{anime.duration || '24 min'}</small>
+                      </div>
+                      <span className="grid size-8 flex-none place-items-center rounded-full bg-brand-600 text-white transition group-hover:bg-brand-700">
+                        <Play className="ml-0.5 size-3.5 fill-current" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-[16px] bg-surface-0 p-8 text-center text-xs text-ink-muted shadow-sm">
+                  No se encontraron episodios con el filtro "{epSearch}".
+                </div>
+              )}
 
               {/* Paginación de episodios si superan el tamaño de página (Item 6) */}
               {totalPages > 1 && (
