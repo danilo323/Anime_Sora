@@ -3,6 +3,20 @@ const cheerio = require('cheerio');
 const { FLV_BASE_URL, HEADERS } = require('../config/constants');
 const { memoryCache } = require('./jikanService');
 
+const TIO_BASE_URL = 'https://tioanime.com';
+
+const UI_SERVER_NAMES = [
+  'Sora HD',
+  'Nube',
+  'Titán',
+  'Fénix',
+  'Espejo',
+  'Delta',
+  'Nova',
+  'Zenith',
+  'Solar',
+];
+
 // Normaliza textos para comparar títulos con precisión
 function normalizeTitle(str = '') {
   try {
@@ -80,13 +94,13 @@ async function findLanguageSlugs(query) {
 }
 
 /**
- * Extrae servidores de video de AnimeFLV desde var videos = {"SUB": [...], "LAT": [...]}
+ * Motor 1: Extrae servidores de video de AnimeFLV desde var videos = {"SUB": [...], "LAT": [...]}
  * Protegido contra cambios de ofuscación y fallos de cheerio.
  */
 async function getFlvServers(slug, episodeNumber, audioKey) {
   try {
     const episodeUrl = `${FLV_BASE_URL}/ver/${slug}-${episodeNumber}`;
-    const { data } = await axios.get(episodeUrl, { headers: HEADERS, timeout: 3000 });
+    const { data } = await axios.get(episodeUrl, { headers: HEADERS, timeout: 2800 });
 
     let $;
     try {
@@ -140,7 +154,86 @@ async function getFlvServers(slug, episodeNumber, audioKey) {
 }
 
 /**
- * Extrae servidores reales listos para iframe desde Jkanime con decodificación Base64 estricta
+ * Motor 2: Extrae servidores desde TioAnime (var videos = [["Server", "Url", ...], ...])
+ * Con soporte para slugs limpios y doblaje latino.
+ */
+async function getTioAnimeServers(slug, episodeNumber, audioKey) {
+  const cleanSlug = slug.replace(/-latino$/i, '');
+  const candidateSlugs = [];
+
+  if (audioKey === 'LAT') {
+    candidateSlugs.push(`${cleanSlug}-latino`, `${cleanSlug}-audio-latino`, slug);
+  } else {
+    candidateSlugs.push(slug, cleanSlug);
+  }
+
+  // Variaciones habituales de slugs en TioAnime
+  candidateSlugs.push(
+    cleanSlug.replace(/uu/g, 'u'),
+    cleanSlug.replace(/ou/g, 'o'),
+    cleanSlug.replace(/-tv/g, ''),
+    cleanSlug.replace(/-shippuuden/g, '-shippuden')
+  );
+
+  const uniqueCandidates = Array.from(new Set(candidateSlugs));
+
+  for (const s of uniqueCandidates) {
+    try {
+      const url = `${TIO_BASE_URL}/ver/${s}-${episodeNumber}`;
+      const { data } = await axios.get(url, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        timeout: 2800,
+      });
+
+      if (!data || typeof data !== 'string') continue;
+
+      const match = data.match(/var videos = (\[[\s\S]*?\]);/);
+      if (match && match[1]) {
+        let list = [];
+        try {
+          list = JSON.parse(match[1]);
+        } catch (jsonErr) {
+          console.warn(`Error al parsear JSON de videos en TioAnime para ${s}:`, jsonErr.message);
+          continue;
+        }
+
+        if (!Array.isArray(list)) continue;
+
+        const results = list
+          .map((item) => {
+            try {
+              if (!Array.isArray(item) || item.length < 2) return null;
+              const server = String(item[0] || 'TioStream');
+              const rawUrl = String(item[1] || '').trim();
+
+              if (!rawUrl || !rawUrl.startsWith('http')) return null;
+              if (rawUrl.includes('mediafire.com')) return null;
+
+              return { server, url: rawUrl };
+            } catch (_) {
+              return null;
+            }
+          })
+          .filter(Boolean);
+
+        if (results.length > 0) {
+          return results;
+        }
+      }
+    } catch (_) {
+      // Si falla una variación, continúa con la siguiente
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Motor 3 (Alternativo / Respaldo): Extrae servidores reales desde JKAnime con decodificación Base64 estricta
  */
 async function getJkanimeServers(slug, episodeNumber, audioKey) {
   const cleanSlug = slug.replace(/-latino$/i, '');
@@ -163,7 +256,7 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
-        timeout: 3500,
+        timeout: 2800,
       });
 
       if (!data || typeof data !== 'string') continue;
@@ -182,17 +275,14 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
 
         const embeds = list
           .map((item) => {
-            // Decodificación Base64 con try/catch estricto
             try {
               if (!item || !item.remote || typeof item.remote !== 'string') return null;
               const decoded = Buffer.from(item.remote.trim(), 'base64').toString('utf8').trim();
               if (!decoded || !decoded.startsWith('http')) return null;
-
-              // Descartar descargas directas de mediafire u otros no embebibles
               if (decoded.includes('mediafire.com')) return null;
 
               return {
-                server: item.server || 'Stream',
+                server: item.server || 'JKStream',
                 lang: Number(item.lang) || 1,
                 url: decoded,
               };
@@ -212,7 +302,7 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
         }
       }
     } catch (_) {
-      // Si falla una variación de slug, continúa con la siguiente sin lanzar error
+      // Continuar con siguiente candidato
     }
   }
 
@@ -220,11 +310,13 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
 }
 
 /**
- * Obtiene los servidores reales ordenados y mapeados para los botones:
- * - Botón 1: "Sora HD"
- * - Botón 2: "Nube"
- * - Botón 3: "Espejo"
- * Envuelto en try/catch general para garantizar que el servidor Express nunca crashee.
+ * Multi-Scraper Inteligente:
+ * 1. Ejecuta en paralelo AnimeFLV, TioAnime y JKAnime con try/catch independientes.
+ * 2. Combina los arreglos de todas las fuentes disponibles.
+ * 3. Filtra enlaces repetidos, caídos o no embebibles.
+ * 4. Mapea la lista combinada a los 9 nombres de la interfaz:
+ *    ['Sora HD', 'Nube', 'Titán', 'Fénix', 'Espejo', 'Delta', 'Nova', 'Zenith', 'Solar']
+ * 5. Devuelve hasta 9 servidores limpios (.slice(0, 9)).
  */
 async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
   try {
@@ -234,47 +326,78 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       if (cached) return cached;
     }
 
-    const uiNames = ['Sora HD', 'Nube', 'Espejo'];
+    // 1 & 2. Ejecutar motores en paralelo con Promise.allSettled y try/catch independientes
+    const [flvResult, tioResult, jkResult] = await Promise.allSettled([
+      getFlvServers(slug, episodeNumber, audioKey),
+      getTioAnimeServers(slug, episodeNumber, audioKey),
+      getJkanimeServers(slug, episodeNumber, audioKey),
+    ]);
 
-    // 1. Probar AnimeFLV (var videos = ...) con manejo seguro
-    try {
-      const flvServers = await getFlvServers(slug, episodeNumber, audioKey);
-      if (Array.isArray(flvServers) && flvServers.length > 0) {
-        const mapped = flvServers.slice(0, 3).map((srv, idx) => ({
-          id: idx,
-          name: uiNames[idx] || srv.server,
-          originalServer: srv.server,
-          embedUrl: srv.url,
-        }));
-        if (memoryCache && memoryCache.set) {
-          memoryCache.set(cacheKey, mapped, 2 * 60 * 60); // 2 horas de caché
-        }
-        return mapped;
+    const flvServers =
+      flvResult.status === 'fulfilled' && Array.isArray(flvResult.value) ? flvResult.value : [];
+    const tioServers =
+      tioResult.status === 'fulfilled' && Array.isArray(tioResult.value) ? tioResult.value : [];
+    const jkServers =
+      jkResult.status === 'fulfilled' && Array.isArray(jkResult.value) ? jkResult.value : [];
+
+    // 3. Combinar arreglos respetando orden de prioridad
+    const combined = [...flvServers, ...tioServers, ...jkServers];
+
+    // 4. Filtrar duplicados, enlaces no seguros o no embebibles
+    const seenUrls = new Set();
+    const cleanServers = [];
+
+    for (const item of combined) {
+      if (!item || !item.url || typeof item.url !== 'string') continue;
+
+      const url = item.url.trim();
+
+      // Debe ser URL http(s)
+      if (!url.startsWith('http://') && !url.startsWith('https://')) continue;
+
+      // Descartar descargas o enlaces incompatibles con iframe
+      if (
+        url.includes('mediafire.com') ||
+        url.includes('drive.google.com/uc') ||
+        url.endsWith('.rar') ||
+        url.endsWith('.zip')
+      ) {
+        continue;
       }
-    } catch (flvErr) {
-      console.warn('Error en getFlvServers:', flvErr.message);
+
+      // Clave normalizada para deduplicar
+      const normKey = url
+        .toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/+$/, '')
+        .replace(/[?&]token=[^&]+/, '');
+
+      if (seenUrls.has(normKey)) continue;
+      seenUrls.add(normKey);
+
+      cleanServers.push({
+        server: item.server || 'Directo',
+        url,
+      });
     }
 
-    // 2. Probar JKAnime (var servers = [...] decodificado en Base64) con manejo seguro
-    try {
-      const jkServers = await getJkanimeServers(slug, episodeNumber, audioKey);
-      if (Array.isArray(jkServers) && jkServers.length > 0) {
-        const mapped = jkServers.slice(0, 3).map((srv, idx) => ({
-          id: idx,
-          name: uiNames[idx] || srv.server,
-          originalServer: srv.server,
-          embedUrl: srv.url,
-        }));
-        if (memoryCache && memoryCache.set) {
-          memoryCache.set(cacheKey, mapped, 2 * 60 * 60);
-        }
-        return mapped;
+    // 5. Mapear a los 9 nombres de la interfaz y tomar hasta 9
+    if (cleanServers.length > 0) {
+      const mapped = cleanServers.slice(0, 9).map((srv, idx) => ({
+        id: idx,
+        name: UI_SERVER_NAMES[idx] || `Servidor ${idx + 1}`,
+        originalServer: srv.server,
+        embedUrl: srv.url,
+      }));
+
+      if (memoryCache && memoryCache.set) {
+        memoryCache.set(cacheKey, mapped, 2 * 60 * 60); // 2 horas en caché
       }
-    } catch (jkErr) {
-      console.warn('Error en getJkanimeServers:', jkErr.message);
+
+      return mapped;
     }
 
-    // 3. Servidores de respaldo con reproductores estándar si las fuentes no responden
+    // 6. Servidores de respaldo si ninguna fuente respondió
     const clean = String(slug || '').replace(/-latino$/i, '');
     const fallbacks = [
       {
@@ -291,7 +414,7 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       },
       {
         id: 2,
-        name: 'Espejo',
+        name: 'Titán',
         originalServer: 'StreamWish',
         embedUrl: `https://embed.su/embed/anime/${clean}/${episodeNumber}`,
       },

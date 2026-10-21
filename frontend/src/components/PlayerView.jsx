@@ -19,8 +19,14 @@ import { useLocalStorage } from '../hooks'
 
 const DEFAULT_SERVERS = [
   { name: 'Sora HD', desc: 'Principal · 1080p' },
-  { name: 'Nube', desc: 'Alternativo · 720p' },
-  { name: 'Espejo', desc: 'Respaldo · 480p' },
+  { name: 'Nube', desc: 'Rápido · 720p' },
+  { name: 'Titán', desc: 'Estable · 1080p' },
+  { name: 'Fénix', desc: 'Alternativo · 720p' },
+  { name: 'Espejo', desc: 'Respaldo · 720p' },
+  { name: 'Delta', desc: 'Respaldo · 480p' },
+  { name: 'Nova', desc: 'Secundario · 720p' },
+  { name: 'Zenith', desc: 'Auxiliar · 480p' },
+  { name: 'Solar', desc: 'Auxiliar · 480p' },
 ]
 
 const RANGE_SIZE = 25
@@ -321,22 +327,22 @@ function PlayerSession({ item, episode }) {
               </span>
             </div>
 
-            {/* Selector de servidores (Sora HD, Nube, Espejo) y acciones */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-white/50 hidden md:inline">Servidores:</span>
-              <div className="flex items-center rounded-xl bg-white/5 p-1 ring-1 ring-white/10">
+            {/* Selector de servidores (Sora HD, Nube, Titán, etc.) y acciones */}
+            <div className="flex items-center gap-2 max-w-full">
+              <span className="text-xs text-white/50 hidden xl:inline flex-none">Servidores:</span>
+              <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md lg:max-w-lg xl:max-w-xl rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
                 {serversList.map((s, idx) => {
                   const active = idx === serverIdx
                   return (
                     <button
-                      key={s.name}
+                      key={`${s.name}-${idx}`}
                       onClick={() => setServerIdx(idx)}
-                      className={`rounded-lg px-3 py-1 text-xs font-semibold transition ${
+                      className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
                         active
                           ? 'bg-brand-600 text-white shadow-sm'
                           : 'text-white/70 hover:text-white hover:bg-white/10'
                       }`}
-                      title={s.desc}
+                      title={`${s.name}: ${s.desc}`}
                     >
                       {s.name}
                     </button>
@@ -348,7 +354,7 @@ function PlayerSession({ item, episode }) {
               <button
                 onClick={() => toggleFavorite(item)}
                 title={fav ? 'Quitar de favoritos' : 'Añadir a favoritos'}
-                className={`grid size-8 place-items-center rounded-lg transition ${
+                className={`grid size-8 flex-none place-items-center rounded-lg transition ${
                   fav ? 'bg-danger text-white' : 'bg-white/10 text-white hover:bg-white/20'
                 }`}
               >
