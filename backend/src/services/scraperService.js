@@ -23,18 +23,180 @@ const UI_SERVER_NAMES = [
   'Nebulosa',
 ];
 
-// Normaliza textos para comparar títulos con precisión
-function normalizeTitle(str = '') {
-  try {
-    return String(str || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9\s]/g, '')
-      .trim();
-  } catch (_) {
-    return '';
+// Palabras de parada universales para comparar títulos de forma precisa
+const STOP_WORDS = new Set([
+  'the',
+  'la',
+  'el',
+  'los',
+  'las',
+  'de',
+  'del',
+  'y',
+  'and',
+  'no',
+  'a',
+  'an',
+  'in',
+  'on',
+  'of',
+  'to',
+  'for',
+  'with',
+  'season',
+  'temporada',
+  'part',
+  'parte',
+  'arc',
+  'saga',
+  'serie',
+  'series',
+  'anime',
+  'pelicula',
+  'movie',
+  'ova',
+  'special',
+  'capitulo',
+  'episode',
+  'ep',
+]);
+
+// Mapeo universal de numerales en texto a dígitos
+const NUM_WORDS = {
+  1: 1,
+  one: 1,
+  uno: 1,
+  first: 1,
+  primer: 1,
+  primero: 1,
+  primera: 1,
+  i: 1,
+  2: 2,
+  two: 2,
+  dos: 2,
+  second: 2,
+  segundo: 2,
+  segunda: 2,
+  ii: 2,
+  3: 3,
+  three: 3,
+  tres: 3,
+  third: 3,
+  tercer: 3,
+  tercero: 3,
+  tercera: 3,
+  iii: 3,
+  4: 4,
+  four: 4,
+  cuatro: 4,
+  fourth: 4,
+  cuarto: 4,
+  cuarta: 4,
+  iv: 4,
+  5: 5,
+  five: 5,
+  cinco: 5,
+  fifth: 5,
+  quinto: 5,
+  quinta: 5,
+  v: 5,
+  6: 6,
+  six: 6,
+  seis: 6,
+  sixth: 6,
+  sexto: 6,
+  sexta: 6,
+  vi: 6,
+  7: 7,
+  seven: 7,
+  siete: 7,
+  seventh: 7,
+  septimo: 7,
+  septima: 7,
+  vii: 7,
+  8: 8,
+  eight: 8,
+  ocho: 8,
+  eighth: 8,
+  octavo: 8,
+  octava: 8,
+  viii: 8,
+  9: 9,
+  nine: 9,
+  nueve: 9,
+  ninth: 9,
+  noveno: 9,
+  novena: 9,
+  ix: 9,
+  10: 10,
+  ten: 10,
+  diez: 10,
+  tenth: 10,
+  decimo: 10,
+  decima: 10,
+  x: 10,
+};
+
+// Extrae números y ordinales presentes en cualquier texto
+function extractNumbers(str = '') {
+  const nums = new Set();
+  const tokens = String(str || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  for (const t of tokens) {
+    if (/^\d+$/.test(t)) {
+      nums.add(Number(t));
+    } else if (NUM_WORDS[t]) {
+      nums.add(NUM_WORDS[t]);
+    }
   }
+  return nums;
+}
+
+// Algoritmo universal de similitud basado en overlap de tokens y compatibilidad de temporada
+function calculateSimilarity(targetSlug, candidateTitle, candidateSlug) {
+  const targetTokens = String(targetSlug || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !STOP_WORDS.has(w));
+
+  const candTokens = `${candidateTitle || ''} ${candidateSlug || ''}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !STOP_WORDS.has(w));
+
+  const targetNums = extractNumbers(targetSlug);
+  const candNums = extractNumbers(`${candidateTitle || ''} ${candidateSlug || ''}`);
+
+  // Recompensa si coinciden en número de temporada/parte; penaliza si difieren
+  let numberScore = 0;
+  if (targetNums.size > 0 && candNums.size > 0) {
+    let matchFound = false;
+    for (const tn of targetNums) {
+      if (candNums.has(tn)) {
+        matchFound = true;
+        break;
+      }
+    }
+    if (matchFound) numberScore += 12;
+    else numberScore -= 6;
+  }
+
+  // Solapamiento de palabras clave
+  let overlap = 0;
+  for (const t of targetTokens) {
+    if (candTokens.includes(t)) {
+      overlap += 2;
+    } else if (candTokens.some((ct) => ct.includes(t) || t.includes(ct))) {
+      overlap += 1;
+    }
+  }
+
+  return overlap + numberScore;
 }
 
 // Convierte un título en un slug limpio de respaldo
@@ -52,44 +214,22 @@ function slugifyTitle(title = '') {
 }
 
 /**
- * Resuelve y genera candidatos inteligentes de slugs en español,
- * contemplando sagas como Avatar (Libro 1 Agua, Libro 2 Tierra, Libro 3 Fuego), Korra,
- * temporadas y adaptaciones de títulos en inglés hacia español.
+ * Normalizaciones lingüísticas universales aplicables a cualquier título/slug
+ * (sin acoplar nombres de series específicas).
  */
-async function resolveSlugCandidates(slug, audioKey = 'SUB') {
+function getUniversalSlugVariations(slug, audioKey = 'SUB') {
   const norm = String(slug || '').toLowerCase().trim();
   const clean = norm.replace(/-latino$/i, '');
-  const candidates = [];
-
-  // 1. Reglas específicas para la saga Avatar / Aang / Korra
-  if (norm.includes('avatar') || norm.includes('aang') || norm.includes('korra')) {
-    if (norm.includes('korra')) {
-      candidates.push('avatar-la-leyenda-de-korra');
-    }
-    if (norm.includes('book-1') || norm.includes('water') || norm.includes('agua') || norm.includes('uno')) {
-      candidates.push('avatar-libro-uno');
-    }
-    if (norm.includes('book-2') || norm.includes('earth') || norm.includes('tierra') || norm.includes('dos')) {
-      candidates.push('avatar-libro-dos');
-    }
-    if (norm.includes('book-3') || norm.includes('fire') || norm.includes('fuego') || norm.includes('tres')) {
-      candidates.push('avatar-libro-tres');
-    }
-    candidates.push('avatar-libro-uno', 'avatar-libro-dos', 'avatar-libro-tres', 'avatar-la-leyenda-de-korra');
-  }
+  const list = [];
 
   if (audioKey === 'LAT') {
-    candidates.push(`${clean}-latino`, `${clean}-audio-latino`);
+    list.push(`${clean}-latino`, `${clean}-audio-latino`);
   }
 
-  candidates.push(slug, clean);
+  list.push(slug, clean);
 
-  // 2. Normalizaciones habituales de títulos
-  candidates.push(
-    clean.replace(/the-last-airbender-book-1-water/g, 'libro-uno'),
-    clean.replace(/the-last-airbender-book-2-earth/g, 'libro-dos'),
-    clean.replace(/the-last-airbender-book-3-fire/g, 'libro-tres'),
-    clean.replace(/the-last-airbender/g, 'avatar'),
+  // Variaciones fonéticas y estructurales universales
+  list.push(
     clean.replace(/-season-\d+/g, ''),
     clean.replace(/-\d+(st|nd|rd|th)-season/g, ''),
     clean.replace(/uu/g, 'u'),
@@ -98,7 +238,7 @@ async function resolveSlugCandidates(slug, audioKey = 'SUB') {
     clean.replace(/-shippuuden/g, '-shippuden')
   );
 
-  return Array.from(new Set(candidates.filter(Boolean)));
+  return Array.from(new Set(list.filter(Boolean)));
 }
 
 /**
@@ -155,59 +295,72 @@ function normalizeForDedup(url) {
 }
 
 /**
- * Busca los slugs disponibles en el catálogo de streaming (protegido contra fallos)
+ * Búsqueda dinámica y universal en el directorio de TioAnime.
+ * Se ejecuta únicamente cuando un slug no coincide de forma directa.
  */
-async function findLanguageSlugs(query) {
-  try {
-    const url = `${FLV_BASE_URL}/browse?q=${encodeURIComponent(query)}`;
-    const { data } = await axios.get(url, { headers: HEADERS, timeout: 2500 });
-
-    let $;
-    try {
-      $ = cheerio.load(data);
-    } catch (parseErr) {
-      console.warn('Cheerio fallo parseando HTML en findLanguageSlugs:', parseErr.message);
-      return { slugJap: null, slugLat: null, allMatches: [] };
-    }
-
-    const results = [];
-    try {
-      $('.ListAnimes li article').each((_, el) => {
-        try {
-          const href = $(el).find('a').attr('href') || '';
-          const title = $(el).find('h3.Title').text().trim();
-          const slug = href.replace('/anime/', '').replace(/\//g, '').trim();
-          if (slug) {
-            results.push({ title, normTitle: normalizeTitle(title), slug });
-          }
-        } catch (_) {}
-      });
-    } catch (_) {}
-
-    let slugJap = null;
-    let slugLat = null;
-
-    results.forEach((item) => {
-      const isLatino = item.normTitle.includes('latino') || item.slug.includes('latino');
-      if (isLatino) {
-        if (!slugLat) slugLat = item.slug;
-      } else {
-        if (!slugJap) slugJap = item.slug;
-      }
-    });
-
-    return { slugJap, slugLat, allMatches: results };
-  } catch (error) {
-    return { slugJap: null, slugLat: null, allMatches: [] };
+async function searchTioAnimeDirectory(slug) {
+  const cacheKey = `dir:tio:${slug}`;
+  if (memoryCache && memoryCache.get) {
+    const cached = memoryCache.get(cacheKey);
+    if (cached) return cached;
   }
+
+  const clean = String(slug || '')
+    .toLowerCase()
+    .replace(/-latino$/i, '');
+  const words = clean.split('-').filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+  const queries = [words.slice(0, 2).join(' '), words[0]].filter(Boolean);
+  const uniqueQueries = Array.from(new Set(queries));
+
+  const items = [];
+  for (const q of uniqueQueries) {
+    try {
+      const url = `${TIO_BASE_URL}/directorio?q=${encodeURIComponent(q)}`;
+      const { data } = await axios.get(url, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        timeout: 2500,
+      });
+
+      const $ = cheerio.load(data);
+      $('.anime a').each((_, el) => {
+        const href = $(el).attr('href') || '';
+        const title = $(el).find('.title').text().trim();
+        if (href.startsWith('/anime/')) {
+          items.push({ slug: href.replace('/anime/', ''), title });
+        }
+      });
+
+      if (items.length > 0) break;
+    } catch (_) {}
+  }
+
+  // Ordenar candidatos por similitud universal (umbral mínimo para evitar falsos positivos)
+  const ranked = items
+    .map((item) => ({
+      ...item,
+      score: calculateSimilarity(slug, item.title, item.slug),
+    }))
+    .filter((item) => item.score >= 2)
+    .sort((a, b) => b.score - a.score);
+
+  const bestSlugs = ranked.map((r) => r.slug);
+
+  if (memoryCache && memoryCache.set) {
+    memoryCache.set(cacheKey, bestSlugs, 24 * 60 * 60);
+  }
+
+  return bestSlugs;
 }
 
 /**
  * Motor 1: Extrae servidores de video de AnimeFLV desde var videos = {"SUB": [...], "LAT": [...]}
- * Extrae URLs o iframes mediante expresiones regulares.
  */
 async function getFlvServers(slug, episodeNumber, audioKey) {
-  const candidateSlugs = await resolveSlugCandidates(slug, audioKey);
+  const candidateSlugs = getUniversalSlugVariations(slug, audioKey);
 
   for (const s of candidateSlugs) {
     try {
@@ -217,7 +370,7 @@ async function getFlvServers(slug, episodeNumber, audioKey) {
       let $;
       try {
         $ = cheerio.load(data);
-      } catch (cheerioErr) {
+      } catch (_) {
         continue;
       }
 
@@ -238,7 +391,11 @@ async function getFlvServers(slug, episodeNumber, audioKey) {
 
       let selectedList = [];
       if (audioKey === 'LAT') {
-        selectedList = Array.isArray(rawVideos.LAT) ? rawVideos.LAT : (Array.isArray(rawVideos.SUB) ? rawVideos.SUB : []);
+        selectedList = Array.isArray(rawVideos.LAT)
+          ? rawVideos.LAT
+          : Array.isArray(rawVideos.SUB)
+          ? rawVideos.SUB
+          : [];
       } else {
         selectedList = Array.isArray(rawVideos.SUB) ? rawVideos.SUB : [];
       }
@@ -270,11 +427,12 @@ async function getFlvServers(slug, episodeNumber, audioKey) {
 
 /**
  * Motor 2: Extrae servidores desde TioAnime (var videos = [["Server", "Url", ...], ...])
- * Con soporte para resolución dinámica de slugs (Avatar, Korra, sagas) y búsqueda en directorio.
+ * Con búsqueda dinámica universal si las variaciones iniciales no coinciden.
  */
 async function getTioAnimeServers(slug, episodeNumber, audioKey) {
-  const candidateSlugs = await resolveSlugCandidates(slug, audioKey);
+  const candidateSlugs = getUniversalSlugVariations(slug, audioKey);
 
+  // 1. Probar variaciones inmediatas
   for (const s of candidateSlugs) {
     try {
       const url = `${TIO_BASE_URL}/ver/${s}-${episodeNumber}`;
@@ -317,64 +475,41 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
           })
           .filter(Boolean);
 
-        if (results.length > 0) {
-          return results;
-        }
+        if (results.length > 0) return results;
       }
     } catch (_) {
-      // Continuar con siguiente candidato
+      // Continuar
     }
   }
 
-  // Búsqueda dinámica en directorio si ninguna variación directa funcionó
+  // 2. Búsqueda dinámica universal si falló la coincidencia literal
   try {
-    const cleanSlug = slug.replace(/-latino$/i, '').toLowerCase();
-    const words = cleanSlug.split('-').filter((w) => w.length > 2 && !['the', 'and', 'book', 'season'].includes(w));
-    const searchQuery = words[0] || cleanSlug;
-    if (searchQuery) {
-      const dirUrl = `${TIO_BASE_URL}/directorio?q=${encodeURIComponent(searchQuery)}`;
-      const { data } = await axios.get(dirUrl, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-        timeout: 2500,
-      });
+    const discoveredSlugs = await searchTioAnimeDirectory(slug);
+    for (const ds of discoveredSlugs.slice(0, 4)) {
+      if (candidateSlugs.includes(ds)) continue;
+      try {
+        const epUrl = `${TIO_BASE_URL}/ver/${ds}-${episodeNumber}`;
+        const epRes = await axios.get(epUrl, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          },
+          timeout: 2500,
+        });
 
-      const $ = cheerio.load(data);
-      const dirSlugs = [];
-      $('.anime a').each((_, el) => {
-        const href = $(el).attr('href') || '';
-        if (href.startsWith('/anime/')) {
-          dirSlugs.push(href.replace('/anime/', ''));
+        const match = epRes.data?.match(/var videos = (\[[\s\S]*?\]);/);
+        if (match && match[1]) {
+          const list = JSON.parse(match[1]);
+          const results = list
+            .map((item) => {
+              const cleanUrl = extractCleanUrl(item[1]);
+              return cleanUrl ? { server: String(item[0] || 'TioStream'), url: cleanUrl } : null;
+            })
+            .filter(Boolean);
+
+          if (results.length > 0) return results;
         }
-      });
-
-      for (const ds of dirSlugs.slice(0, 4)) {
-        if (candidateSlugs.includes(ds)) continue;
-        try {
-          const epUrl = `${TIO_BASE_URL}/ver/${ds}-${episodeNumber}`;
-          const epRes = await axios.get(epUrl, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-            },
-            timeout: 2500,
-          });
-          const match = epRes.data?.match(/var videos = (\[[\s\S]*?\]);/);
-          if (match && match[1]) {
-            const list = JSON.parse(match[1]);
-            const results = list
-              .map((item) => {
-                const cleanUrl = extractCleanUrl(item[1]);
-                return cleanUrl ? { server: String(item[0] || 'TioStream'), url: cleanUrl } : null;
-              })
-              .filter(Boolean);
-            if (results.length > 0) return results;
-          }
-        } catch (_) {}
-      }
+      } catch (_) {}
     }
   } catch (_) {}
 
@@ -385,7 +520,7 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
  * Motor 3 (Auxiliar / Respaldo): Extrae servidores reales desde JKAnime con decodificación Base64 estricta
  */
 async function getJkanimeServers(slug, episodeNumber, audioKey) {
-  const candidateSlugs = await resolveSlugCandidates(slug, audioKey);
+  const candidateSlugs = getUniversalSlugVariations(slug, audioKey);
 
   for (const s of candidateSlugs) {
     try {
@@ -454,7 +589,6 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
  * 3. Extrae la URL limpia (el src="...") usando expresiones regulares.
  * 4. Elimina enlaces duplicados y URLs inválidas o vacías.
  * 5. Mapea los resultados dinámicamente según el tamaño real del arreglo (sin longitud fija forzada).
- *    Si encuentra 2 devuelve 2; si encuentra 8 devuelve 8.
  */
 async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
   try {
@@ -584,8 +718,7 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
 
 module.exports = {
   slugifyTitle,
-  findLanguageSlugs,
   getEpisodeServers,
   extractCleanUrl,
-  resolveSlugCandidates,
+  calculateSimilarity,
 };
