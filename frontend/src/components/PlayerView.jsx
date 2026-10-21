@@ -93,6 +93,25 @@ function PlayerSession({ item, episode }) {
   const videoRef = useRef(null)
   const hlsRef = useRef(null)
   const lastTimeRef = useRef(0)
+  const serversContainerRef = useRef(null)
+
+  const scrollServers = useCallback((direction) => {
+    if (serversContainerRef.current) {
+      const amount = direction === 'left' ? -260 : 260
+      serversContainerRef.current.scrollBy({ left: amount, behavior: 'smooth' })
+    }
+  }, [])
+
+  // Desplazar automáticamente el botón del servidor activo a la vista
+  useEffect(() => {
+    if (serversContainerRef.current && serversContainerRef.current.children[serverIdx]) {
+      serversContainerRef.current.children[serverIdx].scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      })
+    }
+  }, [serverIdx])
 
   // Estado del panel lateral de episodios
   const [showSidebar, setShowSidebar] = useLocalStorage('sora_player_sidebar', true)
@@ -564,8 +583,83 @@ function PlayerSession({ item, episode }) {
             )}
           </div>
 
-          {/* Barra inferior: Servidores con indicación de calidad y servidor original */}
-          <div className="flex-none border-t border-white/10 bg-navy-950/95 px-4 py-3 flex flex-wrap items-center justify-between gap-3 z-10">
+          {/* 1. Franja completa dedicada a los Servidores (Sora HD, Nube, Espejo... con soporte para 9+ servidores) */}
+          {servers.length > 0 && !unairedState && (
+            <div className="flex-none border-t border-white/10 bg-navy-900/95 px-3 py-2 z-15 backdrop-blur-md flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-none pl-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                  <Tv className="size-3.5" /> Servidores ({servers.length}):
+                </span>
+              </div>
+
+              {/* Botón flecha izquierda */}
+              <button
+                onClick={() => scrollServers('left')}
+                className="grid size-7 flex-none place-items-center rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition active:scale-95"
+                title="Desplazar servidores a la izquierda"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+
+              {/* Contenedor horizontal desplazable con TODOS los 9+ servidores visibles */}
+              <div
+                ref={serversContainerRef}
+                className="flex-1 flex items-center gap-1.5 overflow-x-auto scroll-smooth scrollbar-thin py-0.5"
+              >
+                {servers.map((s, idx) => {
+                  const active = idx === serverIdx
+                  return (
+                    <button
+                      key={`${s.name}-${idx}`}
+                      onClick={() => handleServerChange(idx)}
+                      className={`whitespace-nowrap flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition active:scale-95 ${
+                        active
+                          ? 'bg-brand-600 text-white shadow-md shadow-brand-500/30 ring-2 ring-brand-400'
+                          : 'bg-white/5 text-white/80 hover:text-white hover:bg-white/15 border border-white/5'
+                      }`}
+                      title={`${s.name}: ${s.desc || s.quality || 'Servidor'}`}
+                    >
+                      <span>{s.name}</span>
+                      {s.originalServer && (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                            active ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60'
+                          }`}
+                        >
+                          {s.originalServer}
+                        </span>
+                      )}
+                      {s.quality && (
+                        <span
+                          className={`text-[9px] font-bold px-1 rounded ${
+                            s.quality.includes('1080')
+                              ? 'bg-emerald-500/25 text-emerald-300'
+                              : s.quality.includes('720')
+                              ? 'bg-sky-500/25 text-sky-300'
+                              : 'bg-amber-500/25 text-amber-300'
+                          }`}
+                        >
+                          {s.quality}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Botón flecha derecha */}
+              <button
+                onClick={() => scrollServers('right')}
+                className="grid size-7 flex-none place-items-center rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition active:scale-95"
+                title="Desplazar servidores a la derecha"
+              >
+                <ChevronRight className="size-4" />
+              </button>
+            </div>
+          )}
+
+          {/* 2. Barra de información del episodio y acciones */}
+          <div className="flex-none border-t border-white/10 bg-navy-950/95 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 z-10">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="block text-xs sm:text-sm font-bold text-white uppercase tracking-wider truncate">
@@ -590,34 +684,7 @@ function PlayerSession({ item, episode }) {
               </span>
             </div>
 
-            {/* Selector de servidores (Sora HD, Nube, Espejo...) con etiquetas de resolución */}
-            <div className="flex items-center gap-2 max-w-full">
-              {servers.length > 0 && !unairedState && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-white/50 hidden xl:inline flex-none">Servidores:</span>
-                  <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md lg:max-w-lg xl:max-w-xl rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
-                    {servers.map((s, idx) => {
-                      const active = idx === serverIdx
-                      return (
-                        <button
-                          key={`${s.name}-${idx}`}
-                          onClick={() => handleServerChange(idx)}
-                          className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                            active
-                              ? 'bg-brand-600 text-white shadow-sm ring-1 ring-brand-400'
-                              : 'text-white/70 hover:text-white hover:bg-white/10'
-                          }`}
-                          title={`${s.name}: ${s.desc || s.quality || 'Servidor'}`}
-                        >
-                          {s.name}
-                          {s.quality ? ` · ${s.quality}` : ''}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
+            <div className="flex items-center gap-2">
               {/* Subtítulos si existen */}
               {subtitles.length > 0 && (
                 <div className="relative">
