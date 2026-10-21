@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Hls from 'hls.js'
 import {
   ArrowDownUp,
   ChevronLeft,
@@ -10,24 +11,15 @@ import {
   ListVideo,
   Play,
   Search,
+  Subtitles,
+  Tv,
   Volume2,
   X,
+  RotateCcw,
 } from 'lucide-react'
 import axios from 'axios'
 import { useApp, episodeList, API_BASE } from '../context/AppContext'
 import { useLocalStorage } from '../hooks'
-
-const DEFAULT_SERVERS = [
-  { name: 'Sora HD', desc: 'Principal · 1080p' },
-  { name: 'Nube', desc: 'Rápido · 720p' },
-  { name: 'Espejo', desc: 'Respaldo · 720p' },
-  { name: 'Titán', desc: 'Estable · 1080p' },
-  { name: 'Fénix', desc: 'Alternativo · 720p' },
-  { name: 'Delta', desc: 'Respaldo · 480p' },
-  { name: 'Nova', desc: 'Secundario · 720p' },
-  { name: 'Zenith', desc: 'Auxiliar · 480p' },
-  { name: 'Solar', desc: 'Auxiliar · 480p' },
-]
 
 const RANGE_SIZE = 25
 
@@ -57,11 +49,20 @@ function PlayerSession({ item, episode }) {
       .replace(/^-+|-+$/g, '')
   }, [item?.slug, item?.title])
 
-  const [backendServers, setBackendServers] = useState([])
+  // Datos de video crudo (.m3u8 / .mp4) devueltos por Consumet
+  const [sources, setSources] = useState([])
+  const [subtitles, setSubtitles] = useState([])
+  const [servers, setServers] = useState([])
+  const [activeIdx, setActiveIdx] = useState(0)
   const [loading, setLoading] = useState(Boolean(resolvedSlug))
-  const [serverIdx, setServerIdx] = useState(0)
+  const [streamError, setStreamError] = useState(null)
 
-  // Estado del panel lateral de episodios (estilo JKAnime)
+  // Referencias para el reproductor de video nativo y Hls.js
+  const videoRef = useRef(null)
+  const hlsRef = useRef(null)
+  const lastTimeRef = useRef(0)
+
+  // Estado del panel lateral de episodios
   const [showSidebar, setShowSidebar] = useLocalStorage('sora_player_sidebar', true)
   const [searchQuery, setSearchQuery] = useState('')
   const [rangeIdx, setRangeIdx] = useState(() => Math.floor((episode - 1) / RANGE_SIZE))
@@ -70,6 +71,8 @@ function PlayerSession({ item, episode }) {
   const [watchedEpisodes, setWatchedEpisodes] = useLocalStorage(`sora_watched_${item?.id || 'default'}`, {})
   const [filterWatchedOnly, setFilterWatchedOnly] = useState(false)
   const [episodesMeta, setEpisodesMeta] = useState({})
+  const [showSubtitleMenu, setShowSubtitleMenu] = useState(false)
+  const [activeSubtitleTrack, setActiveSubtitleTrack] = useState(-1) // -1 = desactivado o por defecto
 
   const activeItemRef = useRef(null)
 
@@ -113,37 +116,45 @@ function PlayerSession({ item, episode }) {
     }))
   }, [item?.id, episode, setWatchedEpisodes])
 
-  // Cargar servidores del episodio actual desde el backend
+  // Cargar fuentes de video (.m3u8 y .mp4) desde el backend (Consumet)
   useEffect(() => {
     if (!resolvedSlug) {
-      setBackendServers([])
+      setSources([])
+      setServers([])
+      setSubtitles([])
       setLoading(false)
       return
     }
 
     let alive = true
     setLoading(true)
+    setStreamError(null)
 
     const audioKey = item?.audioKey || 'SUB'
     axios
       .get(`${API_BASE}/episode/${encodeURIComponent(resolvedSlug)}/${episode}`, {
         params: { audioKey },
-        timeout: 9000,
+        timeout: 12000,
       })
       .then((res) => {
         if (!alive) return
-        const list = res.data?.servers || []
-        if (Array.isArray(list) && list.length > 0) {
-          setBackendServers(list)
-          setServerIdx(0)
-        } else {
-          setBackendServers([])
-        }
+        const srcList = res.data?.sources || []
+        const srvList = res.data?.servers || []
+        const subList = res.data?.subtitles || []
+
+        setSources(srcList)
+        setServers(srvList)
+        setSubtitles(subList)
+        setActiveIdx(0)
+        lastTimeRef.current = 0
       })
       .catch((err) => {
         if (!alive) return
-        console.warn('Error al obtener servidores:', err.message)
-        setBackendServers([])
+        console.warn('Error al obtener stream crudo de Consumet:', err.message)
+        setStreamError('No se pudo conectar con el servidor de video. Intenta nuevamente.')
+        setSources([])
+        setServers([])
+        setSubtitles([])
       })
       .finally(() => {
         if (alive) setLoading(false)
@@ -167,30 +178,130 @@ function PlayerSession({ item, episode }) {
     }
   }, [episode, showSidebar, rangeIdx, showAllEpisodes])
 
-  const serversList = useMemo(() => {
-    if (backendServers.length > 0) {
-      return backendServers.map((s, i) => ({
-        name: s.name || `Servidor ${i + 1}`,
-        desc: s.originalServer ? `${s.originalServer} · HD` : (i === 0 ? 'Principal · 1080p' : 'Alternativo · 720p'),
-        embedUrl: s.embedUrl || '',
-      }))
-    }
-    return DEFAULT_SERVERS
-  }, [backendServers])
+  // Fuente o servidor actualmente activo
+  const activeSource = useMemo(() => {
+    if (sources.length > 0) return sources[activeIdx] || sources[0]
+    if (servers.length > 0) return servers[activeIdx] || servers[0]
+    return null
+  }, [sources, servers, activeIdx])
 
-  const curServer = serversList[serverIdx] || serversList[0]
-  const hasEmbedUrl = Boolean(curServer?.embedUrl)
+  const activeStreamUrl = activeSource?.url || ''
+
+  // Manejador del reproductor de video nativo con Hls.js
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !activeStreamUrl) return
+
+    // Limpiar instancia previa de Hls.js
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
+    const isM3U8 = Boolean(activeSource?.isM3U8 || activeStreamUrl.includes('.m3u8'))
+
+    const restoreTimeAndPlay = () => {
+      if (lastTimeRef.current > 0 && Number.isFinite(lastTimeRef.current)) {
+        video.currentTime = lastTimeRef.current
+      }
+      video.play().catch(() => {
+        // Autoplay policy puede requerir interacción del usuario
+      })
+    }
+
+    if (isM3U8) {
+      if (Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 90,
+        })
+        hlsRef.current = hls
+        hls.loadSource(activeStreamUrl)
+        hls.attachMedia(video)
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          restoreTimeAndPlay()
+        })
+
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                hls.startLoad()
+                break
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError()
+                break
+              default:
+                hls.destroy()
+                setStreamError('Error en la transmisión de video HLS.')
+                break
+            }
+          }
+        })
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Soporte nativo de HLS en Safari / iOS
+        video.src = activeStreamUrl
+        video.addEventListener('loadedmetadata', restoreTimeAndPlay, { once: true })
+      } else {
+        video.src = activeStreamUrl
+      }
+    } else {
+      // Archivo MP4 directo
+      video.src = activeStreamUrl
+      video.addEventListener('loadedmetadata', restoreTimeAndPlay, { once: true })
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+    }
+  }, [activeStreamUrl, activeSource?.isM3U8])
+
+  // Guardar posición al cambiar de calidad
+  const handleQualityChange = useCallback(
+    (newIdx) => {
+      if (videoRef.current) {
+        lastTimeRef.current = videoRef.current.currentTime || 0
+      }
+      setActiveIdx(newIdx)
+    },
+    []
+  )
 
   const handleClose = useCallback(() => {
     closePlayer()
   }, [closePlayer])
 
+  // Atajos de teclado para el reproductor
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'IFRAME') return
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return
+
       if (e.key === 'Escape') {
         e.preventDefault()
         handleClose()
+      } else if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault()
+        if (videoRef.current) {
+          if (videoRef.current.paused) videoRef.current.play()
+          else videoRef.current.pause()
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        if (videoRef.current) videoRef.current.currentTime += 5
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (videoRef.current) videoRef.current.currentTime -= 5
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault()
+        if (videoRef.current) {
+          if (document.fullscreenElement) document.exitFullscreen()
+          else videoRef.current.requestFullscreen().catch(() => {})
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -213,7 +324,6 @@ function PlayerSession({ item, episode }) {
   const visibleEpisodes = useMemo(() => {
     let list = [...episodes]
 
-    // Filtrar por texto de búsqueda
     const q = searchQuery.trim().toLowerCase()
     if (q) {
       list = list.filter((n) => {
@@ -225,12 +335,10 @@ function PlayerSession({ item, episode }) {
       list = list.slice(currentRange.start - 1, currentRange.end)
     }
 
-    // Filtrar vistos
     if (filterWatchedOnly) {
       list = list.filter((n) => Boolean(watchedEpisodes[n]))
     }
 
-    // Orden ascendente o descendente
     if (!sortAsc) {
       list.reverse()
     }
@@ -259,7 +367,7 @@ function PlayerSession({ item, episode }) {
             <h1 className="text-sm font-semibold truncate text-white">{item?.title || 'Sora Anime'}</h1>
             <p className="text-xs text-white/60 truncate">
               Episodio {episode} {item?.episodes ? `de ${item.episodes}` : ''} ·{' '}
-              {item?.audioKey === 'LAT' ? 'Español Latino' : 'Sub Español'}
+              {item?.audioKey === 'LAT' ? 'Español Latino' : 'Sub Español'} · Video Crudo HLS
             </p>
           </div>
         </div>
@@ -270,7 +378,9 @@ function PlayerSession({ item, episode }) {
             onClick={() => setShowSidebar((s) => !s)}
             title={showSidebar ? 'Ocultar episodios' : 'Ver episodios'}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              showSidebar ? 'bg-brand-600 text-white shadow-sm ring-1 ring-brand-400/40' : 'bg-white/10 text-white/80 hover:bg-white/20'
+              showSidebar
+                ? 'bg-brand-600 text-white shadow-sm ring-1 ring-brand-400/40'
+                : 'bg-white/10 text-white/80 hover:bg-white/20'
             }`}
           >
             <ListVideo className="size-4" />
@@ -279,76 +389,144 @@ function PlayerSession({ item, episode }) {
         </div>
       </header>
 
-      {/* 2. Cuerpo principal: Contenedor con Video a la izquierda y Episodios a la derecha (estilo JKAnime) */}
+      {/* 2. Cuerpo principal: Contenedor con Video nativo a la izquierda y Episodios a la derecha */}
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 relative overflow-hidden">
-        {/* Columna Izquierda: Reproductor de Video */}
+        {/* Columna Izquierda: Reproductor de Video Nativo (Sin IFrames) */}
         <section className="flex-1 flex flex-col min-w-0 h-full bg-black relative">
           <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden">
-            {hasEmbedUrl ? (
-              <iframe
-                key={`${curServer.name}-${curServer.embedUrl}`}
-                src={curServer.embedUrl}
-                allowFullScreen
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
-                sandbox="allow-scripts allow-same-origin allow-presentation"
-                className="absolute inset-0 size-full border-0 bg-black"
-                title={`${item?.title || 'Anime'} - ${curServer.name}`}
-              />
+            {activeStreamUrl ? (
+              <div className="relative size-full flex items-center justify-center bg-black">
+                <video
+                  ref={videoRef}
+                  controls
+                  playsInline
+                  crossOrigin="anonymous"
+                  className="size-full max-h-full object-contain bg-black focus:outline-none"
+                  poster={item?.poster || item?.image}
+                >
+                  {subtitles.map((sub, i) => (
+                    <track
+                      key={`${sub.lang}-${i}`}
+                      kind="subtitles"
+                      label={sub.lang || `Sub ${i + 1}`}
+                      src={sub.url}
+                      srcLang={sub.lang?.slice(0, 2)?.toLowerCase() || 'es'}
+                      default={i === 0 || sub.lang?.toLowerCase().includes('es')}
+                    />
+                  ))}
+                  Tu navegador no soporta la reproducción de video HTML5.
+                </video>
+              </div>
             ) : loading ? (
               <div className="flex flex-col items-center gap-3 text-white p-6 text-center">
                 <span className="size-12 animate-spin rounded-full border-4 border-brand-500/30 border-t-brand-500" />
-                <b className="text-base font-semibold">Cargando servidores de streaming…</b>
+                <b className="text-base font-semibold">Extrayendo video crudo vía Consumet…</b>
                 <p className="text-xs text-white/60 max-w-xs">
-                  Extrayendo servidores en tiempo real para el Episodio {episode}.
+                  Cargando stream maestro HLS (.m3u8) para el Episodio {episode}.
                 </p>
+              </div>
+            ) : streamError ? (
+              <div className="text-center p-6 text-white/80 max-w-md">
+                <p className="text-base font-semibold text-danger">{streamError}</p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-500"
+                >
+                  <RotateCcw className="size-3.5" /> Reintentar
+                </button>
               </div>
             ) : (
               <div className="text-center p-6 text-white/80 max-w-md">
-                <p className="text-base font-semibold">No se encontraron servidores para este episodio</p>
+                <p className="text-base font-semibold">No se encontraron streams para este episodio</p>
                 <p className="text-xs text-white/50 mt-1">
-                  Intenta cambiar de servidor abajo o selecciona otro episodio en la lista de la derecha.
+                  Intenta seleccionar otro episodio en la lista de la derecha.
                 </p>
               </div>
             )}
           </div>
 
-          {/* Barra inferior del reproductor con título y servidores (estilo JKAnime) */}
+          {/* Barra inferior del reproductor: Calidad, subtítulos y controles */}
           <div className="flex-none border-t border-white/10 bg-navy-950/95 px-4 py-3 flex flex-wrap items-center justify-between gap-3 z-10">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="block text-xs sm:text-sm font-bold text-white uppercase tracking-wider truncate">
-                  EPISODIO {episode} {item?.audioKey === 'LAT' ? 'LATINO' : 'JAPONÉS'} - {item?.title}
+                  EPISODIO {episode} {item?.audioKey === 'LAT' ? 'LATINO' : 'SUB'} - {item?.title}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
+                  <Tv className="size-3" /> Video Nativo HLS
                 </span>
               </div>
-              {/* Barra de acento inferior naranja / brand similar a JKAnime */}
               <div className="mt-1 h-0.5 w-16 bg-amber-500 rounded-full" />
               <span className="mt-1 block text-[11px] text-white/60">
-                {item?.audioKey === 'LAT' ? '🇲🇽 Doblaje en Español Latino' : '🇯🇵 Audio Japonés con Subtítulos en Español'}
+                {activeSource?.provider ? `Proveedor: ${activeSource.provider} · ` : ''}
+                {activeSource?.quality ? `Resolución: ${activeSource.quality}` : 'Reproducción fluida sin anuncios'}
               </span>
             </div>
 
-            {/* Selector de servidores (Sora HD, Nube, Titán, etc.) y acciones */}
+            {/* Selector de calidad de video crudo (1080p, 720p, etc.) y subtítulos */}
             <div className="flex items-center gap-2 max-w-full">
-              <span className="text-xs text-white/50 hidden xl:inline flex-none">Servidores:</span>
-              <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md lg:max-w-lg xl:max-w-xl rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
-                {serversList.map((s, idx) => {
-                  const active = idx === serverIdx
-                  return (
-                    <button
-                      key={`${s.name}-${idx}`}
-                      onClick={() => setServerIdx(idx)}
-                      className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                        active
-                          ? 'bg-brand-600 text-white shadow-sm'
-                          : 'text-white/70 hover:text-white hover:bg-white/10'
-                      }`}
-                      title={`${s.name}: ${s.desc}`}
-                    >
-                      {s.name}
-                    </button>
-                  )
-                })}
-              </div>
+              {sources.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-white/50 hidden md:inline flex-none">Calidad:</span>
+                  <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
+                    {sources.map((s, idx) => {
+                      const active = idx === activeIdx
+                      return (
+                        <button
+                          key={`${s.quality}-${idx}`}
+                          onClick={() => handleQualityChange(idx)}
+                          className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                            active
+                              ? 'bg-brand-600 text-white shadow-sm'
+                              : 'text-white/70 hover:text-white hover:bg-white/10'
+                          }`}
+                          title={`Ver en ${s.quality}`}
+                        >
+                          {s.quality ? s.quality.toUpperCase() : `Stream ${idx + 1}`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Botón de subtítulos si Consumet devolvió subtítulos */}
+              {subtitles.length > 0 && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowSubtitleMenu((v) => !v)}
+                    title="Subtítulos"
+                    className="flex items-center gap-1 rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white/80 hover:bg-white/20 transition"
+                  >
+                    <Subtitles className="size-3.5" />
+                    <span>Sub ({subtitles.length})</span>
+                  </button>
+
+                  {showSubtitleMenu && (
+                    <div className="absolute bottom-full right-0 mb-2 w-48 rounded-xl bg-navy-900 border border-white/10 p-1.5 shadow-2xl z-30">
+                      <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white/50">
+                        Subtítulos
+                      </p>
+                      {subtitles.map((sub, i) => (
+                        <button
+                          key={`${sub.lang}-${i}`}
+                          onClick={() => {
+                            setActiveSubtitleTrack(i)
+                            setShowSubtitleMenu(false)
+                          }}
+                          className={`w-full text-left rounded-lg px-2 py-1 text-xs transition ${
+                            activeSubtitleTrack === i
+                              ? 'bg-brand-600 text-white font-semibold'
+                              : 'text-white/80 hover:bg-white/10'
+                          }`}
+                        >
+                          {sub.lang || `Pista ${i + 1}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Botón de favorito */}
               <button
@@ -364,13 +542,12 @@ function PlayerSession({ item, episode }) {
           </div>
         </section>
 
-        {/* Columna Derecha: Panel de Selección de Episodios (diseño tipo JKAnime) */}
+        {/* Columna Derecha: Panel de Selección de Episodios con Miniaturas Kitsu */}
         {showSidebar && (
           <aside className="w-full lg:w-[350px] xl:w-[390px] h-[340px] lg:h-full flex-none bg-navy-900/95 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col z-20 backdrop-blur-xl">
-            {/* Cabecera del panel: Rango, búsqueda y filtros estilo JKAnime */}
+            {/* Cabecera del panel: Rango, búsqueda y filtros */}
             <div className="p-3 border-b border-white/10 flex flex-col gap-2.5 bg-navy-950/70">
               <div className="flex items-center justify-between gap-2">
-                {/* Selector de rango de episodios */}
                 {!showAllEpisodes && ranges.length > 1 ? (
                   <div className="relative flex-1">
                     <select
@@ -394,7 +571,6 @@ function PlayerSession({ item, episode }) {
                   </span>
                 )}
 
-                {/* Botón ojo: alternar vistos */}
                 <button
                   onClick={() => setFilterWatchedOnly((w) => !w)}
                   title={filterWatchedOnly ? 'Mostrando solo vistos' : 'Mostrar todos'}
@@ -405,10 +581,9 @@ function PlayerSession({ item, episode }) {
                   {filterWatchedOnly ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
                 </button>
 
-                {/* Botón de orden: Ascendente / Descendente */}
                 <button
                   onClick={() => setSortAsc((a) => !a)}
-                  title={sortAsc ? 'Orden: 1 a N (cambiar a N a 1)' : 'Orden: N a 1 (cambiar a 1 a N)'}
+                  title={sortAsc ? 'Orden: 1 a N' : 'Orden: N a 1'}
                   className="grid size-8 place-items-center rounded-lg bg-white/10 text-white/70 hover:bg-white/20 hover:text-white transition"
                 >
                   <ArrowDownUp className="size-3.5" />
@@ -457,7 +632,7 @@ function PlayerSession({ item, episode }) {
                           : 'bg-white/[0.04] hover:bg-white/[0.08] text-white/80 hover:text-white border border-white/5'
                       }`}
                     >
-                      {/* Miniatura del episodio (16:9 con captura real vía Kitsu CDN) */}
+                      {/* Miniatura del episodio */}
                       <div className="relative aspect-video w-[82px] sm:w-[94px] flex-none overflow-hidden rounded-lg bg-navy-950 shadow-inner">
                         <img
                           src={episodesMeta[num]?.thumb || item?.poster || item?.image}
@@ -482,7 +657,7 @@ function PlayerSession({ item, episode }) {
                         )}
                       </div>
 
-                      {/* Información del episodio estilo JKAnime */}
+                      {/* Información del episodio */}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-1">
                           <b className={`text-xs font-bold truncate ${isActive ? 'text-white' : 'text-sky-400'}`}>

@@ -75,22 +75,25 @@ async function getAnimeRecommendations(req, res) {
 
 /**
  * GET /api/episode/:slug/:ep?audioKey=SUB|LAT
- * Devuelve la lista de servidores de streaming extraídos de las fuentes en español (Camino 1)
+ * Devuelve directamente las fuentes de video (.m3u8 / .mp4), calidades y subtítulos vía @consumet/extensions
  */
 async function getEpisodeStream(req, res) {
   const { slug, ep } = req.params;
   const audioKey = req.query.audioKey || 'SUB';
   try {
-    const servers = await getEpisodeServers(slug, ep, audioKey);
+    const data = await getEpisodeServers(slug, ep, audioKey);
     res.json({
       slug,
       episode: Number(ep),
       audioKey,
-      servers,
+      sources: data?.sources || [],
+      subtitles: data?.subtitles || [],
+      headers: data?.headers || {},
+      servers: data?.servers || [],
     });
   } catch (error) {
     console.error(`Error en getEpisodeStream para ${slug} ep ${ep}:`, error.message);
-    res.status(500).json({ error: 'Error al obtener servidores' });
+    res.status(500).json({ error: 'Error al obtener fuentes de video' });
   }
 }
 
