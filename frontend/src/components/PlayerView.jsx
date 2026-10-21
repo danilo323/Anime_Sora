@@ -16,6 +16,7 @@ import {
   Volume2,
   X,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react'
 import axios from 'axios'
 import { useApp, episodeList, API_BASE } from '../context/AppContext'
@@ -49,11 +50,11 @@ function PlayerSession({ item, episode }) {
       .replace(/^-+|-+$/g, '')
   }, [item?.slug, item?.title])
 
-  // Datos de video crudo (.m3u8 / .mp4) devueltos por Consumet
+  // Datos de servidores y fuentes en español
   const [sources, setSources] = useState([])
-  const [subtitles, setSubtitles] = useState([])
   const [servers, setServers] = useState([])
-  const [activeIdx, setActiveIdx] = useState(0)
+  const [subtitles, setSubtitles] = useState([])
+  const [serverIdx, setServerIdx] = useState(0)
   const [loading, setLoading] = useState(Boolean(resolvedSlug))
   const [streamError, setStreamError] = useState(null)
 
@@ -72,7 +73,7 @@ function PlayerSession({ item, episode }) {
   const [filterWatchedOnly, setFilterWatchedOnly] = useState(false)
   const [episodesMeta, setEpisodesMeta] = useState({})
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false)
-  const [activeSubtitleTrack, setActiveSubtitleTrack] = useState(-1) // -1 = desactivado o por defecto
+  const [activeSubtitleTrack, setActiveSubtitleTrack] = useState(-1)
 
   const activeItemRef = useRef(null)
 
@@ -116,7 +117,7 @@ function PlayerSession({ item, episode }) {
     }))
   }, [item?.id, episode, setWatchedEpisodes])
 
-  // Cargar fuentes de video (.m3u8 y .mp4) desde el backend (Consumet)
+  // Cargar servidores y fuentes del episodio actual en TIEMPO REAL
   useEffect(() => {
     if (!resolvedSlug) {
       setSources([])
@@ -126,18 +127,37 @@ function PlayerSession({ item, episode }) {
       return
     }
 
-    let alive = true
+    const controller = new AbortController()
+
+    // Reseteo inmediato: visualización en tiempo real sin estados congelados
+    setSources([])
+    setServers([])
+    setSubtitles([])
+    setServerIdx(0)
     setLoading(true)
     setStreamError(null)
+    lastTimeRef.current = 0
+
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause()
+        videoRef.current.removeAttribute('src')
+        videoRef.current.load()
+      } catch (_) {}
+    }
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
 
     const audioKey = item?.audioKey || 'SUB'
     axios
       .get(`${API_BASE}/episode/${encodeURIComponent(resolvedSlug)}/${episode}`, {
         params: { audioKey },
-        timeout: 12000,
+        signal: controller.signal,
+        timeout: 9000,
       })
       .then((res) => {
-        if (!alive) return
         const srcList = res.data?.sources || []
         const srvList = res.data?.servers || []
         const subList = res.data?.subtitles || []
@@ -145,23 +165,26 @@ function PlayerSession({ item, episode }) {
         setSources(srcList)
         setServers(srvList)
         setSubtitles(subList)
-        setActiveIdx(0)
+        setServerIdx(0)
         lastTimeRef.current = 0
       })
       .catch((err) => {
-        if (!alive) return
-        console.warn('Error al obtener stream crudo de Consumet:', err.message)
-        setStreamError('No se pudo conectar con el servidor de video. Intenta nuevamente.')
-        setSources([])
-        setServers([])
-        setSubtitles([])
+        if (axios.isCancel(err) || err.name === 'CanceledError') return
+        console.warn('Error al obtener servidores en español:', err.message)
+        setStreamError('No se pudo conectar con los servidores para este episodio. Intenta cambiar de servidor o reintentar.')
       })
       .finally(() => {
-        if (alive) setLoading(false)
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
       })
 
     return () => {
-      alive = false
+      controller.abort()
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
     }
   }, [resolvedSlug, episode, item?.audioKey])
 
@@ -178,36 +201,41 @@ function PlayerSession({ item, episode }) {
     }
   }, [episode, showSidebar, rangeIdx, showAllEpisodes])
 
-  // Fuente o servidor actualmente activo
-  const activeSource = useMemo(() => {
-    if (sources.length > 0) return sources[activeIdx] || sources[0]
-    if (servers.length > 0) return servers[activeIdx] || servers[0]
+  // Servidor o fuente actualmente seleccionada
+  const curServer = useMemo(() => {
+    if (servers.length > 0) return servers[serverIdx] || servers[0]
+    if (sources.length > 0) return sources[serverIdx] || sources[0]
     return null
-  }, [sources, servers, activeIdx])
+  }, [servers, sources, serverIdx])
 
-  const activeStreamUrl = activeSource?.url || ''
+  const activeStreamUrl = curServer?.embedUrl || curServer?.url || ''
+  const isDirectStream = Boolean(
+    curServer?.isDirectVideo ||
+    curServer?.isM3U8 ||
+    activeStreamUrl.includes('.m3u8') ||
+    activeStreamUrl.endsWith('.mp4')
+  )
+  const hasEmbedUrl = Boolean(activeStreamUrl && !isDirectStream)
 
-  // Manejador del reproductor de video nativo con Hls.js
+  // Manejador del reproductor de video nativo cuando hay stream directo (.m3u8 o .mp4)
   useEffect(() => {
+    if (!isDirectStream || !activeStreamUrl) return
     const video = videoRef.current
-    if (!video || !activeStreamUrl) return
+    if (!video) return
 
-    // Limpiar instancia previa de Hls.js
     if (hlsRef.current) {
       hlsRef.current.destroy()
       hlsRef.current = null
     }
 
-    const isM3U8 = Boolean(activeSource?.isM3U8 || activeStreamUrl.includes('.m3u8'))
-
     const restoreTimeAndPlay = () => {
       if (lastTimeRef.current > 0 && Number.isFinite(lastTimeRef.current)) {
         video.currentTime = lastTimeRef.current
       }
-      video.play().catch(() => {
-        // Autoplay policy puede requerir interacción del usuario
-      })
+      video.play().catch(() => {})
     }
+
+    const isM3U8 = activeStreamUrl.includes('.m3u8') || curServer?.isM3U8
 
     if (isM3U8) {
       if (Hls.isSupported()) {
@@ -220,10 +248,7 @@ function PlayerSession({ item, episode }) {
         hls.loadSource(activeStreamUrl)
         hls.attachMedia(video)
 
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          restoreTimeAndPlay()
-        })
-
+        hls.on(Hls.Events.MANIFEST_PARSED, restoreTimeAndPlay)
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
             switch (data.type) {
@@ -235,20 +260,18 @@ function PlayerSession({ item, episode }) {
                 break
               default:
                 hls.destroy()
-                setStreamError('Error en la transmisión de video HLS.')
+                setStreamError('Error al reproducir el stream directo.')
                 break
             }
           }
         })
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Soporte nativo de HLS en Safari / iOS
         video.src = activeStreamUrl
         video.addEventListener('loadedmetadata', restoreTimeAndPlay, { once: true })
       } else {
         video.src = activeStreamUrl
       }
     } else {
-      // Archivo MP4 directo
       video.src = activeStreamUrl
       video.addEventListener('loadedmetadata', restoreTimeAndPlay, { once: true })
     }
@@ -259,46 +282,47 @@ function PlayerSession({ item, episode }) {
         hlsRef.current = null
       }
     }
-  }, [activeStreamUrl, activeSource?.isM3U8])
+  }, [activeStreamUrl, isDirectStream, curServer?.isM3U8])
 
-  // Guardar posición al cambiar de calidad
-  const handleQualityChange = useCallback(
-    (newIdx) => {
-      if (videoRef.current) {
-        lastTimeRef.current = videoRef.current.currentTime || 0
-      }
-      setActiveIdx(newIdx)
-    },
-    []
-  )
+  // Cambio de servidor / calidad preservando segundo de reproducción
+  const handleServerChange = useCallback((newIdx) => {
+    if (videoRef.current) {
+      lastTimeRef.current = videoRef.current.currentTime || 0
+    }
+    setServerIdx(newIdx)
+  }, [])
 
   const handleClose = useCallback(() => {
     closePlayer()
   }, [closePlayer])
 
-  // Atajos de teclado para el reproductor
+  // Atajos de teclado
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'IFRAME') return
 
       if (e.key === 'Escape') {
         e.preventDefault()
         handleClose()
       } else if (e.key === ' ' || e.code === 'Space') {
-        e.preventDefault()
-        if (videoRef.current) {
+        if (isDirectStream && videoRef.current) {
+          e.preventDefault()
           if (videoRef.current.paused) videoRef.current.play()
           else videoRef.current.pause()
         }
       } else if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        if (videoRef.current) videoRef.current.currentTime += 5
+        if (isDirectStream && videoRef.current) {
+          e.preventDefault()
+          videoRef.current.currentTime += 5
+        }
       } else if (e.key === 'ArrowLeft') {
-        e.preventDefault()
-        if (videoRef.current) videoRef.current.currentTime -= 5
+        if (isDirectStream && videoRef.current) {
+          e.preventDefault()
+          videoRef.current.currentTime -= 5
+        }
       } else if (e.key === 'f' || e.key === 'F') {
-        e.preventDefault()
-        if (videoRef.current) {
+        if (isDirectStream && videoRef.current) {
+          e.preventDefault()
           if (document.fullscreenElement) document.exitFullscreen()
           else videoRef.current.requestFullscreen().catch(() => {})
         }
@@ -306,11 +330,11 @@ function PlayerSession({ item, episode }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleClose])
+  }, [handleClose, isDirectStream])
 
   const fav = isFavorite(item?.id)
 
-  // Rangos de paginación para series largas (ej: Ep 1 - 25, Ep 26 - 50...)
+  // Rangos de paginación
   const ranges = useMemo(() => {
     const totalRanges = Math.ceil(episodes.length / RANGE_SIZE)
     return Array.from({ length: totalRanges }, (_, idx) => {
@@ -320,7 +344,7 @@ function PlayerSession({ item, episode }) {
     })
   }, [episodes.length])
 
-  // Episodios filtrados por búsqueda, rango, orden y vistos
+  // Episodios filtrados
   const visibleEpisodes = useMemo(() => {
     let list = [...episodes]
 
@@ -367,13 +391,12 @@ function PlayerSession({ item, episode }) {
             <h1 className="text-sm font-semibold truncate text-white">{item?.title || 'Sora Anime'}</h1>
             <p className="text-xs text-white/60 truncate">
               Episodio {episode} {item?.episodes ? `de ${item.episodes}` : ''} ·{' '}
-              {item?.audioKey === 'LAT' ? 'Español Latino' : 'Sub Español'} · Video Crudo HLS
+              {item?.audioKey === 'LAT' ? 'Español Latino 🇲🇽' : 'Sub Español 🇯🇵'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Botón para alternar panel lateral de episodios */}
           <button
             onClick={() => setShowSidebar((s) => !s)}
             title={showSidebar ? 'Ocultar episodios' : 'Ver episodios'}
@@ -389,12 +412,20 @@ function PlayerSession({ item, episode }) {
         </div>
       </header>
 
-      {/* 2. Cuerpo principal: Contenedor con Video nativo a la izquierda y Episodios a la derecha */}
+      {/* 2. Cuerpo principal: Contenedor de Video a la izquierda y Episodios a la derecha */}
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 relative overflow-hidden">
-        {/* Columna Izquierda: Reproductor de Video Nativo (Sin IFrames) */}
+        {/* Columna Izquierda: Reproductor Híbrido (Nativo HLS / Embed Blindado sin redirecciones) */}
         <section className="flex-1 flex flex-col min-w-0 h-full bg-black relative">
           <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden">
-            {activeStreamUrl ? (
+            {loading ? (
+              <div className="flex flex-col items-center gap-3 text-white p-6 text-center">
+                <span className="size-12 animate-spin rounded-full border-4 border-brand-500/30 border-t-brand-500" />
+                <b className="text-base font-semibold">Cargando Episodio {episode} en Español…</b>
+                <p className="text-xs text-white/60 max-w-xs">
+                  Sincronizando servidores en alta resolución en tiempo real.
+                </p>
+              </div>
+            ) : isDirectStream ? (
               <div className="relative size-full flex items-center justify-center bg-black">
                 <video
                   ref={videoRef}
@@ -417,14 +448,16 @@ function PlayerSession({ item, episode }) {
                   Tu navegador no soporta la reproducción de video HTML5.
                 </video>
               </div>
-            ) : loading ? (
-              <div className="flex flex-col items-center gap-3 text-white p-6 text-center">
-                <span className="size-12 animate-spin rounded-full border-4 border-brand-500/30 border-t-brand-500" />
-                <b className="text-base font-semibold">Extrayendo video crudo vía Consumet…</b>
-                <p className="text-xs text-white/60 max-w-xs">
-                  Cargando stream maestro HLS (.m3u8) para el Episodio {episode}.
-                </p>
-              </div>
+            ) : hasEmbedUrl ? (
+              <iframe
+                key={`${curServer.name}-${curServer.embedUrl || curServer.url}`}
+                src={curServer.embedUrl || curServer.url}
+                allowFullScreen
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                sandbox="allow-scripts allow-same-origin allow-presentation"
+                className="absolute inset-0 size-full border-0 bg-black"
+                title={`${item?.title || 'Anime'} - ${curServer.name}`}
+              />
             ) : streamError ? (
               <div className="text-center p-6 text-white/80 max-w-md">
                 <p className="text-base font-semibold text-danger">{streamError}</p>
@@ -437,52 +470,54 @@ function PlayerSession({ item, episode }) {
               </div>
             ) : (
               <div className="text-center p-6 text-white/80 max-w-md">
-                <p className="text-base font-semibold">No se encontraron streams para este episodio</p>
+                <p className="text-base font-semibold">No se encontraron servidores para este episodio</p>
                 <p className="text-xs text-white/50 mt-1">
-                  Intenta seleccionar otro episodio en la lista de la derecha.
+                  Intenta cambiar de servidor abajo o selecciona otro episodio en la lista de la derecha.
                 </p>
               </div>
             )}
           </div>
 
-          {/* Barra inferior del reproductor: Calidad, subtítulos y controles */}
+          {/* Barra inferior: Servidores con indicación de calidad y servidor original */}
           <div className="flex-none border-t border-white/10 bg-navy-950/95 px-4 py-3 flex flex-wrap items-center justify-between gap-3 z-10">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="block text-xs sm:text-sm font-bold text-white uppercase tracking-wider truncate">
                   EPISODIO {episode} {item?.audioKey === 'LAT' ? 'LATINO' : 'SUB'} - {item?.title}
                 </span>
-                <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
-                  <Tv className="size-3" /> Video Nativo HLS
-                </span>
+                {isDirectStream && (
+                  <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
+                    <Tv className="size-3" /> Stream Nativo HLS
+                  </span>
+                )}
               </div>
               <div className="mt-1 h-0.5 w-16 bg-amber-500 rounded-full" />
               <span className="mt-1 block text-[11px] text-white/60">
-                {activeSource?.provider ? `Proveedor: ${activeSource.provider} · ` : ''}
-                {activeSource?.quality ? `Resolución: ${activeSource.quality}` : 'Reproducción fluida sin anuncios'}
+                {curServer?.desc || (item?.audioKey === 'LAT' ? 'Audio en Español Latino' : 'Subtitulado en Español')}
               </span>
             </div>
 
-            {/* Selector de calidad de video crudo (1080p, 720p, etc.) y subtítulos */}
+            {/* Selector de servidores (Sora HD, Nube, Espejo...) con etiquetas de resolución */}
             <div className="flex items-center gap-2 max-w-full">
-              {sources.length > 0 && (
+              {servers.length > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-white/50 hidden md:inline flex-none">Calidad:</span>
-                  <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
-                    {sources.map((s, idx) => {
-                      const active = idx === activeIdx
+                  <span className="text-xs text-white/50 hidden xl:inline flex-none">Servidores:</span>
+                  <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md lg:max-w-lg xl:max-w-xl rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
+                    {servers.map((s, idx) => {
+                      const active = idx === serverIdx
                       return (
                         <button
-                          key={`${s.quality}-${idx}`}
-                          onClick={() => handleQualityChange(idx)}
+                          key={`${s.name}-${idx}`}
+                          onClick={() => handleServerChange(idx)}
                           className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
                             active
-                              ? 'bg-brand-600 text-white shadow-sm'
+                              ? 'bg-brand-600 text-white shadow-sm ring-1 ring-brand-400'
                               : 'text-white/70 hover:text-white hover:bg-white/10'
                           }`}
-                          title={`Ver en ${s.quality}`}
+                          title={`${s.name}: ${s.desc || s.quality || 'Servidor'}`}
                         >
-                          {s.quality ? s.quality.toUpperCase() : `Stream ${idx + 1}`}
+                          {s.name}
+                          {s.quality ? ` · ${s.quality}` : ''}
                         </button>
                       )
                     })}
@@ -490,7 +525,7 @@ function PlayerSession({ item, episode }) {
                 </div>
               )}
 
-              {/* Botón de subtítulos si Consumet devolvió subtítulos */}
+              {/* Subtítulos si existen */}
               {subtitles.length > 0 && (
                 <div className="relative">
                   <button
