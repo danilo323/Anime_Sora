@@ -51,8 +51,10 @@ function PlayerSession({ item, episode }) {
     let alive = true
     setLoading(true)
 
+    const audioKey = item?.audioKey || 'SUB'
     axios
       .get(`${API_BASE}/episode/${encodeURIComponent(resolvedSlug)}/${episode}`, {
+        params: { audioKey },
         timeout: 9000,
       })
       .then((res) => {
@@ -77,7 +79,7 @@ function PlayerSession({ item, episode }) {
     return () => {
       alive = false
     }
-  }, [resolvedSlug, episode])
+  }, [resolvedSlug, episode, item?.audioKey])
 
   const serversList = useMemo(() => {
     if (backendServers.length > 0) {
@@ -122,18 +124,26 @@ function PlayerSession({ item, episode }) {
           key={`${curServer.name}-${curServer.embedUrl}`}
           src={curServer.embedUrl}
           allowFullScreen
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           className="absolute inset-0 size-full border-0 z-[5] bg-black"
           title={`${item?.title || 'Anime'} - ${curServer.name}`}
         />
       ) : !loading && (
-        <div className="absolute inset-0 z-[5] grid place-items-center bg-black/60 text-center p-6 text-ink-muted">
-          <p className="text-base text-white font-medium">
-            Preparando reproductor para Jellyfin (Fase 4)
-          </p>
-          <small className="mt-1 text-xs text-ink-muted">
-            Los servidores de video se conectarán a tu biblioteca local en la siguiente fase.
-          </small>
+        <div className="absolute inset-0 z-[5] grid place-items-center bg-black/80 text-center p-6 text-ink-muted">
+          <div className="max-w-md">
+            <p className="text-base text-white font-medium">
+              No se encontraron servidores activos para este episodio
+            </p>
+            <p className="mt-1.5 text-xs text-ink-muted">
+              Intenta seleccionar otro servidor arriba a la derecha (Sora HD, Nube o Espejo) o regresa al catálogo.
+            </p>
+            <button
+              onClick={handleClose}
+              className="btn btn-primary btn-sm mt-4"
+            >
+              Volver al anime
+            </button>
+          </div>
         </div>
       )}
 

@@ -5,22 +5,19 @@
 ![Sora Anime Banner](https://img.shields.io/badge/Sora_Anime-v1.0.0-6366f1?style=for-the-badge&logo=crunchyroll&logoColor=white)
 <br/>
 
-**Tu portal de anime personal, elegante y autocontenido.**  
-Diseñado con una estética moderna en tonos oscuros y *glassmorphism*, impulsado por React 19, Tailwind CSS v4, Express y arquitectura preparada para **Jellyfin**.
+**Tu portal de anime personal, elegante y con streaming infalible.**  
+Diseñado con una estética moderna en tonos oscuros y *glassmorphism*, impulsado por React 19, Tailwind CSS v4, Express y un extractor multi-servidor en tiempo real (AnimeFLV / JKAnime).
 
 [![React](https://img.shields.io/badge/React_19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite_8-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS_v4-38B2AC?style=flat-square&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![Express](https://img.shields.io/badge/Express_5-000000?style=flat-square&logo=express&logoColor=white)](https://expressjs.com/)
-[![ArtPlayer](https://img.shields.io/badge/ArtPlayer-HLS_Listo-E11D48?style=flat-square)](https://artplayer.org/)
-[![Jellyfin](https://img.shields.io/badge/Jellyfin-Preparado-00A4DC?style=flat-square&logo=jellyfin&logoColor=white)](https://jellyfin.org/)
 [![Licencia](https://img.shields.io/badge/Licencia-ISC-blue?style=flat-square)](#)
 
 [Características](#-características-principales) •
 [Arquitectura](#-arquitectura-del-sistema) •
 [Estructura](#-estructura-del-proyecto) •
-[Instalación](#-instalación-y-despliegue) •
-[Plan de Migración](#-plan-de-migración-a-jellyfin)
+[Instalación](#-instalación-y-despliegue)
 
 ---
 
@@ -28,12 +25,12 @@ Diseñado con una estética moderna en tonos oscuros y *glassmorphism*, impulsad
 
 ## ✨ Características Principales
 
-- 🎨 **Interfaz Cyber-Glassmorphism**: Experiencia de usuario inmersiva con tema oscuro, efectos de desenfoque (*backdrop-blur*), transiciones ultrarrápidas y diseño 100% responsivo para móviles y escritorio.
-- ⚡ **Catálogo & Metadatos Resilientes**: Consulta de tops, sinopsis, rankings y recomendaciones a través de **Jikan API v4 (MyAnimeList)** con sistema de contingencia instantáneo (**Kitsu API**) para evitar bloqueos por rate-limiting.
-- 🔒 **Bóveda Personal (*My Vault*)**: Guarda y gestiona tu colección localmente con sincronización persistente en el backend (`myVault.json`).
-- 🛡️ **Zero-CORS & Backend Proxy**: El frontend nunca expone credenciales ni hace peticiones directas a APIs de terceros; todo el tráfico se centraliza y optimiza en el servidor Express.
-- 📺 **Reproductor Multimedia ArtPlayer**: Integración de streaming con soporte para HLS adaptativo (`.m3u8`), MP4 nativo, selector de calidad, atajos de teclado y subtítulos.
-- 🏠 **Arquitectura Autoalojada (Preparada para Jellyfin)**: Olvídate de pop-ups, acortadores y servidores caídos. Diseñado para consumir tu propia biblioteca multimedia local o remota a través de Jellyfin Media Server.
+- 🎬 **Extractor de Servidores Espejo (Camino 1)**: Extracción directa de reproductores limpios (Streamwish, Mega, Vidhide, VOE, Filemoon) desde fuentes en español (AnimeFLV / JKAnime).
+- 🎛️ **Triple Servidor en Reproductor**: Selector integrado con botones **Sora HD** (Principal · 1080p), **Nube** (Alternativo · 720p) y **Espejo** (Respaldo · 480p). Si un servidor se satura, cambias al siguiente al instante sin salir de la app.
+- 🚫 **Zero Banners & Zero Pop-ups**: Los enlaces de video se extraen en el backend y se cargan limpios dentro de la interfaz de Sora Anime, sin redirecciones ni anuncios molestos.
+- 🎨 **Interfaz Cyber-Glassmorphism**: Tema oscuro refinado, efectos de desenfoque (*backdrop-blur*), atajos de teclado y diseño 100% responsivo para móviles y escritorio.
+- ⚡ **Catálogo & Metadatos Resilientes**: Consulta de tops, sinopsis, rankings y recomendaciones a través de **Jikan API v4 (MyAnimeList)** con sistema de contingencia instantáneo (**Kitsu API**) y caché en memoria con TTL.
+- 🔒 **Bóveda Personal (*My Vault*)**: Guarda y gestiona tu colección localmente con persistencia inmediata en el backend (`myVault.json`).
 
 ---
 
@@ -43,35 +40,35 @@ Diseñado con una estética moderna en tonos oscuros y *glassmorphism*, impulsad
 flowchart TD
     subgraph Cliente ["🖥️ Frontend (Vite + React 19)"]
         UI["Interfaz de Usuario (Tailwind v4)"]
-        VaultContext["AppContext (Estado Global & Vault)"]
-        ArtPlayerComp["ArtPlayer (HLS.js / HTML5)"]
+        AppContext["AppContext (Estado Global & Vault)"]
+        PlayerView["PlayerView (Sora HD / Nube / Espejo)"]
     end
 
     subgraph Servidor ["⚙️ Backend (Node.js + Express 5)"]
         Router["API Gateway (/api)"]
-        JikanSvc["Jikan & Kitsu Service (Metadatos)"]
+        JikanSvc["Jikan & Kitsu Service (Metadatos + Caché)"]
+        ScraperSvc["Scraper Service (AnimeFLV + JKAnime)"]
         VaultCtrl["Vault Controller (CRUD JSON)"]
-        JellyfinSvc["Jellyfin Service (Próximamente)"]
     end
 
-    subgraph Persistencia ["💾 Almacenamiento & Medios"]
+    subgraph Fuentes ["🌐 Fuentes Externas"]
+        MAL[("Jikan API / Kitsu API")]
+        MirrorServers[("Servidores Espejo: Mega / Streamwish / Vidhide")]
         VaultDB[("myVault.json")]
-        JellyfinServer[("Servidor Jellyfin Local/Remoto")]
-        ExternalAPIs[("Jikan / Kitsu APIs")]
     end
 
-    UI --> VaultContext
-    UI --> ArtPlayerComp
-    VaultContext -->|Peticiones REST| Router
-    ArtPlayerComp -->|Stream HLS / MP4| Router
+    UI --> AppContext
+    UI --> PlayerView
+    AppContext -->|REST /api/top, /api/search| Router
+    PlayerView -->|GET /api/episode/:slug/:ep| Router
 
     Router --> JikanSvc
+    Router --> ScraperSvc
     Router --> VaultCtrl
-    Router --> JellyfinSvc
 
-    JikanSvc --> ExternalAPIs
+    JikanSvc --> MAL
+    ScraperSvc --> MirrorServers
     VaultCtrl --> VaultDB
-    JellyfinSvc --> JellyfinServer
 ```
 
 ---
@@ -80,32 +77,35 @@ flowchart TD
 
 ```text
 Anime_dex/
-├── backend/                  # Servidor de API y lógica de negocio
+├── backend/                  # Servidor de API y extractor de streams
 │   ├── src/
 │   │   ├── config/
-│   │   │   └── constants.js  # Rutas y configuración de puertos
+│   │   │   └── constants.js  # Headers HTTP y URLs base
 │   │   ├── controllers/
-│   │   │   ├── streamController.js # Búsquedas, top animes y metadatos
-│   │   │   └── vaultController.js  # Gestión de la colección del usuario
+│   │   │   ├── streamController.js # Búsquedas, tops y controlador de episodios
+│   │   │   └── vaultController.js  # CRUD de la bóveda del usuario
 │   │   ├── data/
-│   │   │   └── myVault.json  # Base de datos local en JSON
+│   │   │   └── myVault.json  # Base de datos local
 │   │   ├── routes/
-│   │   │   └── animeRoutes.js# Rutas REST de la aplicación
+│   │   │   └── animeRoutes.js# Rutas REST (/api/top, /api/search, /api/episode)
 │   │   └── services/
-│   │       ├── jikanService.js    # Metadatos con fallback Kitsu
-│   │       └── jellyfinService.js # (Fase 3) Integración con Jellyfin
-│   ├── index.js              # Punto de entrada de Express
+│   │       ├── jikanService.js    # Metadatos con caché y fallback
+│   │       └── scraperService.js  # Extracción multi-servidor (AnimeFLV / JKAnime)
+│   ├── index.js              # Servidor Express (Puerto 4000)
 │   └── package.json
 │
 ├── frontend/                 # Aplicación de cliente SPA
 │   ├── src/
-│   │   ├── components/       # Componentes modulares (AnimeCard, Navbar, Modales)
-│   │   │   └── player/       # Integración con ArtPlayer
-│   │   ├── context/          # Estado global de la aplicación (AppContext)
-│   │   ├── data/             # SVGs y utilidades de renderizado
-│   │   ├── lib/              # Cliente HTTP hacia el backend
-│   │   ├── pages/            # Vistas principales (Home, Search, Detail, Vault)
-│   │   ├── App.jsx           # Enrutamiento principal
+│   │   ├── components/       # Componentes modulares
+│   │   │   ├── AnimeCard.jsx # Tarjeta de anime con estados y badges
+│   │   │   ├── Hero.jsx      # Carrusel interactivo principal
+│   │   │   ├── Navbar.jsx    # Búsqueda en tiempo real y navegación
+│   │   │   └── PlayerView.jsx# Reproductor multi-servidor (Sora HD, Nube, Espejo)
+│   │   ├── context/          # AppContext (estado global, progreso y colección)
+│   │   ├── data/             # Generadores de arte vectorial SVG
+│   │   ├── lib/              # Cliente HTTP centralizado hacia el backend
+│   │   ├── pages/            # Vistas (Home, Explore, Search, Detail, Collection, Profile)
+│   │   ├── App.jsx           # Enrutamiento de la aplicación
 │   │   └── main.jsx
 │   ├── vite.config.js
 │   └── package.json
@@ -119,70 +119,28 @@ Anime_dex/
 
 ### Requisitos Previos
 - **Node.js**: v18.0.0 o superior
-- **npm** o **pnpm** / **yarn**
+- **npm**
 
-### 1. Clonar el Repositorio
-```bash
-git clone https://github.com/tu-usuario/anime-dex.git
-cd anime-dex
-```
-
-### 2. Configuración del Backend
+### 1. Iniciar el Backend
 ```bash
 cd backend
 npm install
-npm run dev
+npm run dev # o npm start
 ```
-> El backend quedará ejecutándose en `http://localhost:4000`.
+> El servidor arrancará en `http://localhost:4000`.
 
-### 3. Configuración del Frontend
+### 2. Iniciar el Frontend
 En una nueva terminal:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-> El cliente web estará disponible en `http://localhost:5173`.
-
----
-
-## 🗺️ Plan de Migración a Jellyfin
-
-El proyecto se encuentra en una transición organizada hacia un reproductor privado autoalojado:
-
-- [x] **Fase 1: Limpieza & Unificación**
-  - Desinstalación de herramientas de scraping frágiles y módulos obsoletos.
-  - Unificación de tarjetas de anime por metadatos únicos.
-  - Proxy centralizado de peticiones de catálogo en Express.
-- [ ] **Fase 2: Configuración de Entorno & Seguridad**
-  - Variables de entorno (`.env` y `.env.example`) para Jellyfin (`URL`, `API_KEY`, `USER_ID`).
-  - Estandarización de `VITE_API_BASE` en el frontend.
-- [ ] **Fase 3: Servicio de Streaming Jellyfin**
-  - Endpoint `/api/jellyfin/match` para emparejar títulos de MyAnimeList con IDs de Jellyfin.
-  - Listado dinámico de temporadas, episodios e información de duración.
-  - Generación de URLs de reproducción HLS/transcodificación adaptativa.
-- [ ] **Fase 4: Integración Completa de ArtPlayer**
-  - Selector de servidor, calidad y pistas de subtítulos dentro de la interfaz de Sora.
-  - Sincronización del progreso de reproducción en Jellyfin.
-
----
-
-## 🛠️ Tecnologías Utilizadas
-
-| Capa | Tecnologías |
-| :--- | :--- |
-| **Frontend** | React 19, Vite, Tailwind CSS v4, React Router 7, Lucide Icons |
-| **Reproductor** | ArtPlayer, HLS.js |
-| **Backend** | Node.js, Express 5, Axios, CORS, Dotenv |
-| **Metadatos** | Jikan API v4 (MyAnimeList), Kitsu API v2 |
-| **Streaming** | Jellyfin Media Server API |
+> La aplicación estará disponible en `http://localhost:5173`.
 
 ---
 
 ## 📄 Licencia
 
-Este proyecto está bajo la licencia **ISC**. Consulta el archivo de licencia para más detalles.
-
-<div align="center">
-  <sub>Desarrollado con ❤️ para los amantes del anime que buscan velocidad, privacidad y buen diseño.</sub>
-</div>
+Este proyecto está bajo la licencia **ISC**.
+Desarrollado con ❤️ para los amantes del anime que buscan velocidad, respaldo múltiple y buen diseño.

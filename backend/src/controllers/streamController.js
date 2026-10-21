@@ -4,6 +4,7 @@ const {
   getAnimeByIdMetadata,
   getRecommendationsMetadata,
 } = require('../services/jikanService');
+const { getEpisodeServers } = require('../services/scraperService');
 
 /**
  * GET /api/search?q=nombre
@@ -72,15 +73,24 @@ async function getAnimeRecommendations(req, res) {
 }
 
 /**
- * Endpoint temporal de episodios (se conectará a Jellyfin en la Fase 3)
+ * GET /api/episode/:slug/:ep?audioKey=SUB|LAT
+ * Devuelve la lista de servidores de streaming extraídos de las fuentes en español (Camino 1)
  */
 async function getEpisodeStream(req, res) {
   const { slug, ep } = req.params;
-  res.json({
-    slug,
-    episode: Number(ep),
-    servers: [],
-  });
+  const audioKey = req.query.audioKey || 'SUB';
+  try {
+    const servers = await getEpisodeServers(slug, ep, audioKey);
+    res.json({
+      slug,
+      episode: Number(ep),
+      audioKey,
+      servers,
+    });
+  } catch (error) {
+    console.error(`Error en getEpisodeStream para ${slug} ep ${ep}:`, error.message);
+    res.status(500).json({ error: 'Error al obtener servidores' });
+  }
 }
 
 module.exports = {

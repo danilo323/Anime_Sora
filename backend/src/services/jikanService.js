@@ -116,6 +116,15 @@ function extractGenres(rawGenres) {
   return Array.from(new Set(list));
 }
 
+function slugifyTitle(title = '') {
+  return String(title || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 // ==========================================
 // 3. Formateo de Anime con null seguro (Items 3 y 4)
 // ==========================================
@@ -136,11 +145,15 @@ function formatAnimeItem(item) {
   const episodes =
     item.episodes != null && Number(item.episodes) > 0 ? Number(item.episodes) : null;
   const year = item.year || item.aired?.prop?.from?.year || null;
+  const title = item.title || item.title_english || 'Anime';
+  const slug = slugifyTitle(title);
 
   return {
     id: mal_id ? String(mal_id) : `anime-${Date.now()}`,
     mal_id,
-    title: item.title || item.title_english || 'Anime',
+    title,
+    slug,
+    audioKey: 'SUB',
     originalTitle: item.title_japanese || item.title || '',
     poster,
     image: poster,
@@ -198,10 +211,15 @@ async function fallbackKitsuSearch(query, limit = 12) {
         .map((inc) => inc.attributes?.title);
       const genres = extractGenres(categoryNames);
 
+      const itemTitle = attr.canonicalTitle || attr.titles?.en || attr.titles?.ja_jp || 'Anime';
+      const itemSlug = slugifyTitle(itemTitle);
+
       return {
         id: realMalId ? String(realMalId) : `kitsu-${item.id}`,
         mal_id: realMalId,
-        title: attr.canonicalTitle || attr.titles?.en || attr.titles?.ja_jp || 'Anime',
+        title: itemTitle,
+        slug: itemSlug,
+        audioKey: 'SUB',
         originalTitle: attr.titles?.ja_jp || attr.canonicalTitle || '',
         poster,
         image: poster,
@@ -262,10 +280,15 @@ async function fallbackKitsuTop(limit = 10, type = null) {
         .map((inc) => inc.attributes?.title);
       const genres = extractGenres(categoryNames);
 
+      const topTitle = attr.canonicalTitle || attr.titles?.en || 'Anime';
+      const topSlug = slugifyTitle(topTitle);
+
       return {
         id: realMalId ? String(realMalId) : `kitsu-${item.id}`,
         mal_id: realMalId,
-        title: attr.canonicalTitle || attr.titles?.en || 'Anime',
+        title: topTitle,
+        slug: topSlug,
+        audioKey: 'SUB',
         originalTitle: attr.titles?.ja_jp || '',
         poster,
         image: poster,
@@ -322,10 +345,15 @@ async function getKitsuAnimeById(kitsuId, overrideMalId = null) {
       .map((inc) => inc.attributes?.title);
     const genres = extractGenres(categoryNames);
 
+    const byIdTitle = attr.canonicalTitle || attr.titles?.en || 'Anime';
+    const byIdSlug = slugifyTitle(byIdTitle);
+
     return {
       id: realMalId ? String(realMalId) : `kitsu-${item.id}`,
       mal_id: realMalId,
-      title: attr.canonicalTitle || attr.titles?.en || 'Anime',
+      title: byIdTitle,
+      slug: byIdSlug,
+      audioKey: 'SUB',
       originalTitle: attr.titles?.ja_jp || '',
       poster,
       image: poster,
