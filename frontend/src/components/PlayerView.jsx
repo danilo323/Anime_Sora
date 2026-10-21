@@ -86,6 +86,9 @@ function PlayerSession({ item, episode }) {
   const [servers, setServers] = useState([])
   const [subtitles, setSubtitles] = useState([])
   const [serverIdx, setServerIdx] = useState(0)
+  const [hasTelegramVault, setHasTelegramVault] = useState(false)
+  const [isArchiving, setIsArchiving] = useState(false)
+  const [vaultToast, setVaultToast] = useState(null)
   const [loading, setLoading] = useState(Boolean(resolvedSlug))
   const [streamError, setStreamError] = useState(null)
 
@@ -104,12 +107,15 @@ function PlayerSession({ item, episode }) {
 
   // Desplazar automáticamente el botón del servidor activo a la vista
   useEffect(() => {
-    if (serversContainerRef.current && serversContainerRef.current.children[serverIdx]) {
-      serversContainerRef.current.children[serverIdx].scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-        inline: 'center',
-      })
+    if (serverIdx > 0 && serversContainerRef.current) {
+      const liveIdx = serverIdx - 1
+      if (serversContainerRef.current.children[liveIdx]) {
+        serversContainerRef.current.children[liveIdx].scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+          inline: 'center',
+        })
+      }
     }
   }, [serverIdx])
 
@@ -227,12 +233,24 @@ function PlayerSession({ item, episode }) {
         const srcList = res.data?.sources || []
         const srvList = res.data?.servers || []
         const subList = res.data?.subtitles || []
+        const vaultOk = Boolean(res.data?.hasTelegramVault)
+        const isArch = Boolean(res.data?.isArchiving)
 
         setUnairedState(null)
         setSources(srcList)
         setServers(srvList)
         setSubtitles(subList)
-        setServerIdx(0)
+        setHasTelegramVault(vaultOk)
+        setIsArchiving(isArch)
+
+        // Si existe en Telegram, activar Sora HD (index 0); si aún no, activar el primer servidor en vivo
+        if (vaultOk) {
+          setServerIdx(0)
+        } else if (srvList.length > 1) {
+          setServerIdx(1)
+        } else {
+          setServerIdx(0)
+        }
         lastTimeRef.current = 0
       })
       .catch((err) => {
@@ -275,12 +293,29 @@ function PlayerSession({ item, episode }) {
     return null
   }, [servers, sources, serverIdx])
 
-  const activeStreamUrl = curServer?.embedUrl || curServer?.url || ''
+  const vaultServer = useMemo(() => {
+    return servers.find((s) => s.group === 'vault') || (servers[0]?.group === 'vault' ? servers[0] : null)
+  }, [servers])
+
+  const liveServers = useMemo(() => {
+    return servers.filter((s) => s.group === 'live')
+  }, [servers])
+
+  const activeStreamUrl = useMemo(() => {
+    const raw = curServer?.embedUrl || curServer?.url || ''
+    if (!raw) return ''
+    if (raw.startsWith('http')) return raw
+    const origin = API_BASE.replace(/\/api$/, '')
+    return `${origin}${raw.startsWith('/') ? '' : '/'}${raw}`
+  }, [curServer])
+
   const isDirectStream = Boolean(
     curServer?.isDirectVideo ||
     curServer?.isM3U8 ||
+    curServer?.isTelegram ||
     activeStreamUrl.includes('.m3u8') ||
-    activeStreamUrl.endsWith('.mp4')
+    activeStreamUrl.endsWith('.mp4') ||
+    activeStreamUrl.includes('/stream/telegram/')
   )
   const hasEmbedUrl = Boolean(activeStreamUrl && !isDirectStream)
 
@@ -581,80 +616,145 @@ function PlayerSession({ item, episode }) {
                 </p>
               </div>
             )}
+            {/* Notificación flotante de Bóveda Telegram si está archivando o pendiente */}
+            {vaultToast && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 max-w-md bg-purple-950/95 border border-purple-500/40 text-purple-200 px-4 py-2.5 rounded-xl shadow-2xl backdrop-blur-md text-xs flex items-center gap-2 animate-fade-in">
+                <Sparkles className="size-4 text-purple-400 flex-none" />
+                <span className="flex-1 font-medium">{vaultToast}</span>
+                <button onClick={() => setVaultToast(null)} className="text-white/60 hover:text-white ml-2">
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* 1. Franja completa dedicada a los Servidores (Sora HD, Nube, Espejo... con soporte para 9+ servidores) */}
+          {/* 1. Franja con las 2 OPCIONES separadas a la vez (Opción 1: Bóveda Telegram / Opción 2: Servidores en Vivo) */}
           {servers.length > 0 && !unairedState && (
-            <div className="flex-none border-t border-white/10 bg-navy-900/95 px-3 py-2 z-15 backdrop-blur-md flex items-center gap-2">
-              <div className="flex items-center gap-1.5 flex-none pl-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
-                  <Tv className="size-3.5" /> Servidores ({servers.length}):
+            <div className="flex-none border-t border-white/10 bg-navy-900/95 px-3 py-2 z-15 backdrop-blur-md flex flex-wrap lg:flex-nowrap items-center gap-2.5">
+              {/* OPCIÓN 1: Bóveda Telegram (Indestructible) */}
+              <div className="flex items-center gap-2 flex-none bg-purple-950/40 border border-purple-500/30 rounded-xl px-2.5 py-1.5 shadow-inner">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1">
+                  <Sparkles className="size-3 text-purple-400" />
+                  <span className="hidden sm:inline">Opción 1:</span> Bóveda
                 </span>
+
+                {vaultServer && (
+                  <button
+                    onClick={() => {
+                      if (vaultServer.available) {
+                        handleServerChange(0)
+                      } else {
+                        setVaultToast(
+                          '⚡ El bot está respaldando este video en Telegram en segundo plano. Usa los servidores en vivo mientras finaliza.'
+                        )
+                        setTimeout(() => setVaultToast(null), 5000)
+                      }
+                    }}
+                    className={`whitespace-nowrap flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition active:scale-95 ${
+                      serverIdx === 0 && vaultServer.available
+                        ? 'bg-purple-600 text-white shadow-md shadow-purple-500/40 ring-2 ring-purple-400'
+                        : vaultServer.available
+                        ? 'bg-purple-900/60 text-purple-200 hover:bg-purple-800/80 border border-purple-500/40'
+                        : 'bg-white/5 text-white/50 border border-dashed border-white/20 hover:bg-white/10'
+                    }`}
+                    title={vaultServer.desc}
+                  >
+                    <span>{vaultServer.name || 'Sora HD'}</span>
+                    {vaultServer.available ? (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-300 flex items-center gap-0.5">
+                        ⚡ Blindado 1080p
+                      </span>
+                    ) : isArchiving ? (
+                      <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 flex items-center gap-1 animate-pulse">
+                        <span className="size-1.5 rounded-full bg-amber-400 animate-ping" />
+                        Guardando…
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-white/10 text-white/60">
+                        Auto-guardar
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
 
-              {/* Botón flecha izquierda */}
-              <button
-                onClick={() => scrollServers('left')}
-                className="grid size-7 flex-none place-items-center rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition active:scale-95"
-                title="Desplazar servidores a la izquierda"
-              >
-                <ChevronLeft className="size-4" />
-              </button>
+              {/* Separador vertical sutil entre las dos opciones */}
+              <div className="hidden lg:block h-6 w-px bg-white/15 flex-none" />
 
-              {/* Contenedor horizontal desplazable con TODOS los 9+ servidores visibles */}
-              <div
-                ref={serversContainerRef}
-                className="flex-1 flex items-center gap-1.5 overflow-x-auto scroll-smooth scrollbar-thin py-0.5"
-              >
-                {servers.map((s, idx) => {
-                  const active = idx === serverIdx
-                  return (
-                    <button
-                      key={`${s.name}-${idx}`}
-                      onClick={() => handleServerChange(idx)}
-                      className={`whitespace-nowrap flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition active:scale-95 ${
-                        active
-                          ? 'bg-brand-600 text-white shadow-md shadow-brand-500/30 ring-2 ring-brand-400'
-                          : 'bg-white/5 text-white/80 hover:text-white hover:bg-white/15 border border-white/5'
-                      }`}
-                      title={`${s.name}: ${s.desc || s.quality || 'Servidor'}`}
-                    >
-                      <span>{s.name}</span>
-                      {s.originalServer && (
-                        <span
-                          className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                            active ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60'
-                          }`}
-                        >
-                          {s.originalServer}
-                        </span>
-                      )}
-                      {s.quality && (
-                        <span
-                          className={`text-[9px] font-bold px-1 rounded ${
-                            s.quality.includes('1080')
-                              ? 'bg-emerald-500/25 text-emerald-300'
-                              : s.quality.includes('720')
-                              ? 'bg-sky-500/25 text-sky-300'
-                              : 'bg-amber-500/25 text-amber-300'
-                          }`}
-                        >
-                          {s.quality}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
+              {/* OPCIÓN 2: Servidores en Vivo (Espejos de Respaldo) */}
+              <div className="flex-1 flex items-center gap-2 min-w-0 bg-navy-950/40 border border-white/10 rounded-xl px-2 py-1">
+                <div className="flex items-center gap-1 flex-none pl-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1">
+                    <Tv className="size-3 text-sky-400" />
+                    <span className="hidden sm:inline">Opción 2:</span> En Vivo ({liveServers.length}):
+                  </span>
+                </div>
+
+                {/* Flecha izquierda */}
+                <button
+                  onClick={() => scrollServers('left')}
+                  className="grid size-6 flex-none place-items-center rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition active:scale-95"
+                  title="Desplazar a la izquierda"
+                >
+                  <ChevronLeft className="size-3.5" />
+                </button>
+
+                {/* Lista horizontal de servidores en vivo */}
+                <div
+                  ref={serversContainerRef}
+                  className="flex-1 flex items-center gap-1.5 overflow-x-auto scroll-smooth scrollbar-thin py-0.5"
+                >
+                  {liveServers.map((s) => {
+                    const actualIndex = s.id
+                    const active = serverIdx === actualIndex
+                    return (
+                      <button
+                        key={`${s.name}-${actualIndex}`}
+                        onClick={() => handleServerChange(actualIndex)}
+                        className={`whitespace-nowrap flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition active:scale-95 ${
+                          active
+                            ? 'bg-brand-600 text-white shadow-md shadow-brand-500/30 ring-2 ring-brand-400'
+                            : 'bg-white/5 text-white/80 hover:text-white hover:bg-white/15 border border-white/5'
+                        }`}
+                        title={`${s.name}: ${s.desc || s.quality || 'Servidor'}`}
+                      >
+                        <span>{s.name}</span>
+                        {s.originalServer && (
+                          <span
+                            className={`text-[9px] px-1 py-0.5 rounded font-mono ${
+                              active ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60'
+                            }`}
+                          >
+                            {s.originalServer}
+                          </span>
+                        )}
+                        {s.quality && (
+                          <span
+                            className={`text-[9px] font-bold px-1 rounded ${
+                              s.quality.includes('1080')
+                                ? 'bg-emerald-500/25 text-emerald-300'
+                                : s.quality.includes('720')
+                                ? 'bg-sky-500/25 text-sky-300'
+                                : 'bg-amber-500/25 text-amber-300'
+                            }`}
+                          >
+                            {s.quality}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Flecha derecha */}
+                <button
+                  onClick={() => scrollServers('right')}
+                  className="grid size-6 flex-none place-items-center rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition active:scale-95"
+                  title="Desplazar a la derecha"
+                >
+                  <ChevronRight className="size-3.5" />
+                </button>
               </div>
-
-              {/* Botón flecha derecha */}
-              <button
-                onClick={() => scrollServers('right')}
-                className="grid size-7 flex-none place-items-center rounded-lg bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition active:scale-95"
-                title="Desplazar servidores a la derecha"
-              >
-                <ChevronRight className="size-4" />
-              </button>
             </div>
           )}
 
@@ -665,7 +765,12 @@ function PlayerSession({ item, episode }) {
                 <span className="block text-xs sm:text-sm font-bold text-white uppercase tracking-wider truncate">
                   EPISODIO {episode} {item?.audioKey === 'LAT' ? 'LATINO' : 'SUB'} - {item?.title}
                 </span>
-                {isDirectStream && (
+                {curServer?.isTelegram && (
+                  <span className="inline-flex items-center gap-1 rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-semibold text-purple-300 ring-1 ring-purple-500/30">
+                    <Sparkles className="size-3 text-purple-400" /> Bóveda Telegram (Indestructible)
+                  </span>
+                )}
+                {isDirectStream && !curServer?.isTelegram && (
                   <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
                     <Tv className="size-3" /> Stream Nativo HLS
                   </span>

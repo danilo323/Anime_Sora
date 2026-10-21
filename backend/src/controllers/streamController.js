@@ -6,6 +6,25 @@ const {
   getAnimeEpisodesThumbnails,
 } = require('../services/jikanService');
 const { getEpisodeServers, getAnimeAiringInfo } = require('../services/scraperService');
+const { getTelegramEpisode, isArchiving } = require('../services/telegramVaultService');
+const { streamTelegramFile, queueAutoArchive } = require('../services/telegramService');
+
+const LIVE_SERVER_NAMES = [
+  'Nube',
+  'Espejo',
+  'Titán',
+  'Fénix',
+  'Delta',
+  'Nova',
+  'Zenith',
+  'Solar',
+  'Aura',
+  'Eclipse',
+  'Vórtice',
+  'Estrella',
+  'Cometa',
+  'Nebulosa',
+];
 
 /**
  * GET /api/search?q=nombre
@@ -75,21 +94,85 @@ async function getAnimeRecommendations(req, res) {
 
 /**
  * GET /api/episode/:slug/:ep?audioKey=SUB|LAT
- * Devuelve directamente las fuentes de video (.m3u8 / .mp4), calidades y subtítulos con soporte para animes en emisión
+ * Lógica híbrida unificada:
+ * 1. Revisa si el episodio ya está guardado en la bóveda de Telegram.
+ * 2. Si existe, 'Sora HD' carga desde Telegram a máxima velocidad.
+ * 3. Si no existe, entrega los servidores en vivo / Consumet y lanza auto-guardado en segundo plano.
  */
 async function getEpisodeStream(req, res) {
   const { slug, ep } = req.params;
   const audioKey = req.query.audioKey || 'SUB';
   try {
-    const data = await getEpisodeServers(slug, ep, audioKey);
+    const epNum = Number(ep) || 1;
+
+    // 1. Consulta la base de datos de Telegram
+    const tgRecord = getTelegramEpisode(slug, epNum, audioKey);
+    const archivingActive = isArchiving(slug, epNum, audioKey);
+    const hasTelegramVault = Boolean(tgRecord && tgRecord.telegramMessageId);
+
+    // 2. Extrae servidores en vivo (Consumet / Espejos)
+    const data = await getEpisodeServers(slug, epNum, audioKey);
+
+    // Servidor 1: Bóveda Telegram (Indestructible)
+    const vaultServer = {
+      id: 0,
+      name: 'Sora HD',
+      originalServer: 'Telegram MTProto',
+      quality: '1080p',
+      desc: hasTelegramVault
+        ? 'Bóveda Telegram · Ultra Rápido e Indestructible'
+        : archivingActive
+        ? 'Respaldando en Bóveda Telegram en segundo plano…'
+        : 'Bóveda Telegram · Auto-archivado pendiente',
+      url: hasTelegramVault ? `/api/stream/telegram/${tgRecord.telegramMessageId}` : '',
+      embedUrl: hasTelegramVault ? `/api/stream/telegram/${tgRecord.telegramMessageId}` : '',
+      isDirectVideo: true,
+      isTelegram: true,
+      isArchived: hasTelegramVault,
+      available: hasTelegramVault,
+      isArchiving: archivingActive,
+      group: 'vault',
+    };
+
+    // Servidores 2 al 9+: Espejos en vivo
+    const liveServers = (data?.servers || []).map((s, idx) => ({
+      ...s,
+      id: idx + 1,
+      name: LIVE_SERVER_NAMES[idx] || `Servidor ${idx + 2}`,
+      group: 'live',
+      available: true,
+    }));
+
+    const allServers = [vaultServer, ...liveServers];
+
+    // Auto-archivador en segundo plano si aún no está en Telegram
+    if (!hasTelegramVault) {
+      const bestCandidate = (data?.sources || []).find(
+        (s) => s.isDirectVideo || s.url?.endsWith('.mp4') || s.originalServer === 'Mp4upload' || s.originalServer === 'Voe'
+      );
+      if (bestCandidate?.url) {
+        queueAutoArchive({
+          slug,
+          episode: epNum,
+          audioKey,
+          videoUrl: bestCandidate.url,
+        });
+      }
+    }
+
     res.json({
       slug,
-      episode: Number(ep),
+      episode: epNum,
       audioKey,
+      hasTelegramVault,
+      isArchiving: archivingActive,
+      telegramRecord: tgRecord || null,
+      vaultServer,
+      liveServers,
+      servers: allServers,
       sources: data?.sources || [],
       subtitles: data?.subtitles || [],
       headers: data?.headers || {},
-      servers: data?.servers || [],
       isAiring: Boolean(data?.isAiring),
       hasAired: data?.hasAired !== false,
       maxEpisode: data?.maxEpisode || null,
@@ -100,6 +183,15 @@ async function getEpisodeStream(req, res) {
     console.error(`Error en getEpisodeStream para ${slug} ep ${ep}:`, error.message);
     res.status(500).json({ error: 'Error al obtener fuentes de video' });
   }
+}
+
+/**
+ * GET /api/stream/telegram/:id
+ * Endpoint de streaming directo desde Telegram con soporte para Range requests (Seek / Pausa / Adelantar)
+ */
+async function streamTelegramVideo(req, res) {
+  const { id } = req.params;
+  return streamTelegramFile(id, req, res);
 }
 
 /**
@@ -143,4 +235,5 @@ module.exports = {
   getEpisodeStream,
   getEpisodesThumbnails,
   getAiringStatus,
+  streamTelegramVideo,
 };

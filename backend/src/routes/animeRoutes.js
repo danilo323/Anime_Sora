@@ -15,6 +15,7 @@ const {
   getEpisodeStream,
   getEpisodesThumbnails,
   getAiringStatus,
+  streamTelegramVideo,
 } = require('../controllers/streamController');
 
 // Rutas de Bóveda Privada
@@ -32,5 +33,8 @@ router.get('/anime/:slug/airing', getAiringStatus);
 
 // Endpoint de episodios (migrará a Jellyfin en Fase 3)
 router.get('/episode/:slug/:ep', getEpisodeStream);
+
+// Streaming de video directo desde Telegram Vault
+router.get('/stream/telegram/:id', streamTelegramVideo);
 
 module.exports = router;
