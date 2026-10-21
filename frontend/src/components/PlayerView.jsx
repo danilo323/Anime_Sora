@@ -124,7 +124,8 @@ function PlayerSession({ item, episode }) {
           key={`${curServer.name}-${curServer.embedUrl}`}
           src={curServer.embedUrl}
           allowFullScreen
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+          sandbox="allow-scripts allow-same-origin allow-presentation"
           className="absolute inset-0 size-full border-0 z-[5] bg-black"
           title={`${item?.title || 'Anime'} - ${curServer.name}`}
         />
