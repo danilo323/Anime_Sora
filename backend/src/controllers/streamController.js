@@ -3,6 +3,7 @@ const {
   getTopAnimeMetadata,
   getAnimeByIdMetadata,
   getRecommendationsMetadata,
+  getAnimeEpisodesThumbnails,
 } = require('../services/jikanService');
 const { getEpisodeServers } = require('../services/scraperService');
 
@@ -93,10 +94,30 @@ async function getEpisodeStream(req, res) {
   }
 }
 
+/**
+ * GET /api/anime/:id/episodes-thumbnails?title=...&limit=...&offset=...
+ * Devuelve miniaturas reales de episodios desde Kitsu CDN sin almacenar archivos localmente
+ */
+async function getEpisodesThumbnails(req, res) {
+  const { id } = req.params;
+  const title = req.query.title || '';
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+
+  try {
+    const list = await getAnimeEpisodesThumbnails({ id, title, limit, offset });
+    res.json(list);
+  } catch (error) {
+    console.error(`Error en getEpisodesThumbnails para ${id}:`, error.message);
+    res.json([]);
+  }
+}
+
 module.exports = {
   searchAnimeCards,
   getTopAnime,
   getAnimeById,
   getAnimeRecommendations,
   getEpisodeStream,
+  getEpisodesThumbnails,
 };

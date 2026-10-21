@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Check, Film, Heart, Play, Plus, Search } from 'lucide-react'
+import axios from 'axios'
 import AnimePoster from '../components/ui/AnimePoster'
 import { AnimeGrid } from '../components/AnimeCard'
 import { SectionHeader, Tabs } from '../components/ui'
-import { useApp, episodeList } from '../context/AppContext'
+import { useApp, episodeList, API_BASE } from '../context/AppContext'
 import { getAnimeById, getRecommendations } from '../lib/jikan'
 
 const DETAIL_TABS = [
@@ -35,12 +36,44 @@ export default function Detail() {
   const [loading, setLoading] = useState(false)
   const [epPage, setEpPage] = useState(1)
   const [epSearch, setEpSearch] = useState('')
+  const [episodesMeta, setEpisodesMeta] = useState({})
 
   // Anime resuelto (state de navegación, colección o remoto del backend)
   const anime = useMemo(() => {
     if (passedAnime && String(passedAnime.id) === String(id)) return passedAnime
     return getItemOrCatalog(id) || remoteAnime
   }, [id, passedAnime, getItemOrCatalog, remoteAnime])
+
+  // Cargar capturas y títulos reales de cada episodio (Kitsu CDN)
+  useEffect(() => {
+    if (!anime?.id && !anime?.title) return
+    let alive = true
+    const animeId = anime?.id || 'custom'
+    axios
+      .get(`${API_BASE}/anime/${encodeURIComponent(animeId)}/episodes-thumbnails`, {
+        params: { title: anime?.title || '', limit: 100 },
+        timeout: 7000,
+      })
+      .then((res) => {
+        if (!alive || !Array.isArray(res.data)) return
+        const map = {}
+        for (const ep of res.data) {
+          if (ep.number) {
+            map[ep.number] = {
+              thumb: ep.thumbnail,
+              title: ep.title,
+              synopsis: ep.synopsis,
+            }
+          }
+        }
+        setEpisodesMeta(map)
+      })
+      .catch(() => {})
+
+    return () => {
+      alive = false
+    }
+  }, [anime?.id, anime?.title])
 
   // Cargar de la API si no viene en state o colección
   useEffect(() => {
@@ -239,29 +272,43 @@ export default function Detail() {
 
               {currentEpisodes.length > 0 ? (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {currentEpisodes.map((epNum) => (
-                    <button
-                      key={epNum}
-                      onClick={() => handlePlay(epNum)}
-                      className="group flex items-center gap-3 rounded-[14px] bg-surface-0 p-2.5 text-left shadow-sm transition hover:shadow-card hover:ring-1 hover:ring-brand-400"
-                    >
-                      <div className="relative aspect-video w-[90px] flex-none overflow-hidden rounded-lg bg-brand-100">
-                        <AnimePoster anime={anime} />
-                        <span className="absolute inset-0 grid place-items-center bg-navy-900/25 transition group-hover:bg-navy-900/10">
-                          <Play className="size-4 fill-white text-white drop-shadow" />
+                  {currentEpisodes.map((epNum) => {
+                    const epMeta = episodesMeta[epNum]
+                    return (
+                      <button
+                        key={epNum}
+                        onClick={() => handlePlay(epNum)}
+                        className="group flex items-center gap-3 rounded-[14px] bg-surface-0 p-2.5 text-left shadow-sm transition hover:shadow-card hover:ring-1 hover:ring-brand-400"
+                      >
+                        <div className="relative aspect-video w-[90px] flex-none overflow-hidden rounded-lg bg-navy-950 shadow-inner">
+                          {epMeta?.thumb ? (
+                            <img
+                              src={epMeta.thumb}
+                              alt={`Episodio ${epNum}`}
+                              className="size-full object-cover transition duration-300 group-hover:scale-105"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <AnimePoster anime={anime} />
+                          )}
+                          <span className="absolute inset-0 grid place-items-center bg-navy-900/25 transition group-hover:bg-navy-900/10">
+                            <Play className="size-4 fill-white text-white drop-shadow" />
+                          </span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <b className="block truncate text-sm font-semibold group-hover:text-brand-600">
+                            Episodio {epNum}
+                          </b>
+                          <small className="block truncate text-xs text-ink-muted">
+                            {epMeta?.title ? epMeta.title : (anime.duration || '24 min')}
+                          </small>
+                        </div>
+                        <span className="grid size-8 flex-none place-items-center rounded-full bg-brand-600 text-white transition group-hover:bg-brand-700">
+                          <Play className="ml-0.5 size-3.5 fill-current" />
                         </span>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <b className="block truncate text-sm font-semibold group-hover:text-brand-600">
-                          Episodio {epNum}
-                        </b>
-                        <small className="text-xs text-ink-muted">{anime.duration || '24 min'}</small>
-                      </div>
-                      <span className="grid size-8 flex-none place-items-center rounded-full bg-brand-600 text-white transition group-hover:bg-brand-700">
-                        <Play className="ml-0.5 size-3.5 fill-current" />
-                      </span>
-                    </button>
-                  ))}
+                      </button>
+                    )
+                  })}
                 </div>
               ) : (
                 <div className="rounded-[16px] bg-surface-0 p-8 text-center text-xs text-ink-muted shadow-sm">

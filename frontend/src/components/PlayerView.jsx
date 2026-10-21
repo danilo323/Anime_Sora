@@ -63,8 +63,40 @@ function PlayerSession({ item, episode }) {
   const [showAllEpisodes, setShowAllEpisodes] = useState(false)
   const [watchedEpisodes, setWatchedEpisodes] = useLocalStorage(`sora_watched_${item?.id || 'default'}`, {})
   const [filterWatchedOnly, setFilterWatchedOnly] = useState(false)
+  const [episodesMeta, setEpisodesMeta] = useState({})
 
   const activeItemRef = useRef(null)
+
+  // Cargar capturas y títulos reales de cada episodio (Kitsu CDN)
+  useEffect(() => {
+    if (!item?.id && !item?.title) return
+    let alive = true
+    const animeId = item?.id || 'custom'
+    axios
+      .get(`${API_BASE}/anime/${encodeURIComponent(animeId)}/episodes-thumbnails`, {
+        params: { title: item?.title || '', limit: 100 },
+        timeout: 7000,
+      })
+      .then((res) => {
+        if (!alive || !Array.isArray(res.data)) return
+        const map = {}
+        for (const ep of res.data) {
+          if (ep.number) {
+            map[ep.number] = {
+              thumb: ep.thumbnail,
+              title: ep.title,
+              synopsis: ep.synopsis,
+            }
+          }
+        }
+        setEpisodesMeta(map)
+      })
+      .catch(() => {})
+
+    return () => {
+      alive = false
+    }
+  }, [item?.id, item?.title])
 
   // Marcar automáticamente el episodio actual como visto
   useEffect(() => {
@@ -419,10 +451,10 @@ function PlayerSession({ item, episode }) {
                           : 'bg-white/[0.04] hover:bg-white/[0.08] text-white/80 hover:text-white border border-white/5'
                       }`}
                     >
-                      {/* Miniatura del episodio (16:9) */}
+                      {/* Miniatura del episodio (16:9 con captura real vía Kitsu CDN) */}
                       <div className="relative aspect-video w-[82px] sm:w-[94px] flex-none overflow-hidden rounded-lg bg-navy-950 shadow-inner">
                         <img
-                          src={item?.poster || item?.image}
+                          src={episodesMeta[num]?.thumb || item?.poster || item?.image}
                           alt={`Episodio ${num}`}
                           className={`size-full object-cover transition duration-300 ${
                             isActive ? 'opacity-90 scale-105' : 'opacity-70 group-hover:opacity-90 group-hover:scale-105'
@@ -461,7 +493,7 @@ function PlayerSession({ item, episode }) {
                           ) : null}
                         </div>
                         <p className={`mt-0.5 truncate text-[11px] ${isActive ? 'text-white/85' : 'text-white/60'}`}>
-                          {item?.title || 'Anime'}
+                          {episodesMeta[num]?.title || item?.title || 'Anime'}
                         </p>
                         <span className={`mt-1 block text-[10px] ${isActive ? 'text-white/70' : 'text-white/40'}`}>
                           {item?.year ? `${item.year} · ` : ''}

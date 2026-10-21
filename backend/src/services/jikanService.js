@@ -540,10 +540,108 @@ async function getRecommendationsMetadata(id) {
   }
 }
 
+/**
+ * Obtiene miniaturas y títulos reales de cada episodio vía Kitsu CDN (sin descargar nada)
+ */
+async function getAnimeEpisodesThumbnails({ id, title, limit = 50, offset = 0 }) {
+  const cacheKey = `ep-thumbs:${id || title}:${limit}:${offset}`;
+  const cached = memoryCache.get(cacheKey);
+  if (cached) return cached;
+
+  let kitsuId = null;
+  const strId = String(id || '');
+
+  // 1. Si el ID ya es de Kitsu
+  if (strId.startsWith('kitsu-')) {
+    kitsuId = strId.replace('kitsu-', '');
+  }
+
+  // 2. Si es un ID numérico de MyAnimeList, obtener el mapping hacia Kitsu
+  if (!kitsuId && /^\d+$/.test(strId)) {
+    try {
+      const mapRes = await axios.get(
+        `https://kitsu.io/api/edge/mappings?filter[externalSite]=myanimelist/anime&filter[externalId]=${strId}&include=item`,
+        { headers: KITSU_HEADERS, timeout: 4000 }
+      );
+      kitsuId = mapRes.data?.data?.[0]?.relationships?.item?.data?.id;
+    } catch (e) {
+      // Ignorar fallback silencioso
+    }
+  }
+
+  // 3. Fallback por búsqueda de título
+  if (!kitsuId && title) {
+    try {
+      const searchRes = await axios.get(
+        `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(title)}&page[limit]=1`,
+        { headers: KITSU_HEADERS, timeout: 4000 }
+      );
+      kitsuId = searchRes.data?.data?.[0]?.id;
+    } catch (e) {
+      // Ignorar fallback silencioso
+    }
+  }
+
+  if (!kitsuId) {
+    return [];
+  }
+
+  // 4. Obtener episodios de Kitsu con sus capturas CDN (límite máximo de página de Kitsu es 20)
+  try {
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const pagesCount = Math.min(5, Math.ceil(safeLimit / 20));
+    const pagePromises = [];
+
+    for (let i = 0; i < pagesCount; i++) {
+      const pageOffset = offset + i * 20;
+      const pageSize = Math.min(20, safeLimit - i * 20);
+      if (pageSize <= 0) break;
+      pagePromises.push(
+        axios
+          .get(
+            `https://kitsu.io/api/edge/episodes?filter[mediaId]=${kitsuId}&page[limit]=${pageSize}&page[offset]=${pageOffset}&sort=number`,
+            { headers: KITSU_HEADERS, timeout: 5000 }
+          )
+          .catch(() => ({ data: { data: [] } }))
+      );
+    }
+
+    const responses = await Promise.all(pagePromises);
+    const formatted = [];
+
+    for (const r of responses) {
+      const list = r.data?.data || [];
+      for (const ep of list) {
+        const attr = ep.attributes || {};
+        const thumb =
+          attr.thumbnail?.small ||
+          attr.thumbnail?.medium ||
+          attr.thumbnail?.original ||
+          attr.thumbnail?.tiny ||
+          null;
+        formatted.push({
+          number: attr.number,
+          title: attr.canonicalTitle || (attr.titles?.en || attr.titles?.en_jp || `Episodio ${attr.number}`),
+          thumbnail: thumb,
+          synopsis: attr.synopsis || null,
+          airdate: attr.airdate || null,
+        });
+      }
+    }
+
+    memoryCache.set(cacheKey, formatted, 24 * 60 * 60); // 24 horas de caché
+    return formatted;
+  } catch (e) {
+    console.warn(`Error obteniendo episodios de Kitsu para kitsuId ${kitsuId}:`, e.message);
+    return [];
+  }
+}
+
 module.exports = {
   searchAnimeMetadata,
   getTopAnimeMetadata,
   getAnimeByIdMetadata,
   getRecommendationsMetadata,
+  getAnimeEpisodesThumbnails,
   memoryCache,
 };
