@@ -52,6 +52,56 @@ function slugifyTitle(title = '') {
 }
 
 /**
+ * Resuelve y genera candidatos inteligentes de slugs en español,
+ * contemplando sagas como Avatar (Libro 1 Agua, Libro 2 Tierra, Libro 3 Fuego), Korra,
+ * temporadas y adaptaciones de títulos en inglés hacia español.
+ */
+async function resolveSlugCandidates(slug, audioKey = 'SUB') {
+  const norm = String(slug || '').toLowerCase().trim();
+  const clean = norm.replace(/-latino$/i, '');
+  const candidates = [];
+
+  // 1. Reglas específicas para la saga Avatar / Aang / Korra
+  if (norm.includes('avatar') || norm.includes('aang') || norm.includes('korra')) {
+    if (norm.includes('korra')) {
+      candidates.push('avatar-la-leyenda-de-korra');
+    }
+    if (norm.includes('book-1') || norm.includes('water') || norm.includes('agua') || norm.includes('uno')) {
+      candidates.push('avatar-libro-uno');
+    }
+    if (norm.includes('book-2') || norm.includes('earth') || norm.includes('tierra') || norm.includes('dos')) {
+      candidates.push('avatar-libro-dos');
+    }
+    if (norm.includes('book-3') || norm.includes('fire') || norm.includes('fuego') || norm.includes('tres')) {
+      candidates.push('avatar-libro-tres');
+    }
+    candidates.push('avatar-libro-uno', 'avatar-libro-dos', 'avatar-libro-tres', 'avatar-la-leyenda-de-korra');
+  }
+
+  if (audioKey === 'LAT') {
+    candidates.push(`${clean}-latino`, `${clean}-audio-latino`);
+  }
+
+  candidates.push(slug, clean);
+
+  // 2. Normalizaciones habituales de títulos
+  candidates.push(
+    clean.replace(/the-last-airbender-book-1-water/g, 'libro-uno'),
+    clean.replace(/the-last-airbender-book-2-earth/g, 'libro-dos'),
+    clean.replace(/the-last-airbender-book-3-fire/g, 'libro-tres'),
+    clean.replace(/the-last-airbender/g, 'avatar'),
+    clean.replace(/-season-\d+/g, ''),
+    clean.replace(/-\d+(st|nd|rd|th)-season/g, ''),
+    clean.replace(/uu/g, 'u'),
+    clean.replace(/ou/g, 'o'),
+    clean.replace(/-tv/g, ''),
+    clean.replace(/-shippuuden/g, '-shippuden')
+  );
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+/**
  * Extrae la URL limpia (el src="..." o URL directa) usando expresiones regulares.
  * Filtra formatos de iframe, URLs inválidas, vacías o enlaces de descarga no embebibles.
  */
@@ -157,89 +207,75 @@ async function findLanguageSlugs(query) {
  * Extrae URLs o iframes mediante expresiones regulares.
  */
 async function getFlvServers(slug, episodeNumber, audioKey) {
-  try {
-    const episodeUrl = `${FLV_BASE_URL}/ver/${slug}-${episodeNumber}`;
-    const { data } = await axios.get(episodeUrl, { headers: HEADERS, timeout: 2800 });
+  const candidateSlugs = await resolveSlugCandidates(slug, audioKey);
 
-    let $;
+  for (const s of candidateSlugs) {
     try {
-      $ = cheerio.load(data);
-    } catch (cheerioErr) {
-      console.warn('Error en Cheerio al parsear AnimeFLV:', cheerioErr.message);
-      return [];
-    }
+      const episodeUrl = `${FLV_BASE_URL}/ver/${s}-${episodeNumber}`;
+      const { data } = await axios.get(episodeUrl, { headers: HEADERS, timeout: 2500 });
 
-    let rawVideos = {};
-    try {
-      $('script').each((_, el) => {
-        try {
-          const scriptContent = $(el).html() || '';
-          const match = scriptContent.match(/var videos = (\{[\s\S]*?\});/);
-          if (match && match[1]) {
-            try {
-              rawVideos = JSON.parse(match[1]);
-            } catch (jsonErr) {
-              console.warn('Error al parsear JSON de videos en AnimeFLV:', jsonErr.message);
+      let $;
+      try {
+        $ = cheerio.load(data);
+      } catch (cheerioErr) {
+        continue;
+      }
+
+      let rawVideos = {};
+      try {
+        $('script').each((_, el) => {
+          try {
+            const scriptContent = $(el).html() || '';
+            const match = scriptContent.match(/var videos = (\{[\s\S]*?\});/);
+            if (match && match[1]) {
+              try {
+                rawVideos = JSON.parse(match[1]);
+              } catch (_) {}
             }
+          } catch (_) {}
+        });
+      } catch (_) {}
+
+      let selectedList = [];
+      if (audioKey === 'LAT') {
+        selectedList = Array.isArray(rawVideos.LAT) ? rawVideos.LAT : (Array.isArray(rawVideos.SUB) ? rawVideos.SUB : []);
+      } else {
+        selectedList = Array.isArray(rawVideos.SUB) ? rawVideos.SUB : [];
+      }
+
+      const results = selectedList
+        .map((srv) => {
+          try {
+            const rawUrl = srv.code || srv.url || '';
+            const cleanUrl = extractCleanUrl(rawUrl);
+            if (!cleanUrl) return null;
+            return {
+              server: srv.title || srv.server || 'FLV',
+              url: cleanUrl,
+            };
+          } catch (_) {
+            return null;
           }
-        } catch (_) {}
-      });
-    } catch (scriptErr) {
-      console.warn('Error recorriendo scripts de AnimeFLV:', scriptErr.message);
-    }
+        })
+        .filter(Boolean);
 
-    let selectedList = [];
-    if (audioKey === 'LAT') {
-      selectedList = Array.isArray(rawVideos.LAT) ? rawVideos.LAT : (Array.isArray(rawVideos.SUB) ? rawVideos.SUB : []);
-    } else {
-      selectedList = Array.isArray(rawVideos.SUB) ? rawVideos.SUB : [];
+      if (results.length > 0) return results;
+    } catch (_) {
+      // Continuar con siguiente candidato
     }
-
-    return selectedList
-      .map((srv) => {
-        try {
-          const rawUrl = srv.code || srv.url || '';
-          const cleanUrl = extractCleanUrl(rawUrl);
-          if (!cleanUrl) return null;
-          return {
-            server: srv.title || srv.server || 'FLV',
-            url: cleanUrl,
-          };
-        } catch (_) {
-          return null;
-        }
-      })
-      .filter(Boolean);
-  } catch (err) {
-    return [];
   }
+
+  return [];
 }
 
 /**
  * Motor 2: Extrae servidores desde TioAnime (var videos = [["Server", "Url", ...], ...])
- * Extrae URLs limpias de iframes con soporte para slugs en japonés y doblaje latino.
+ * Con soporte para resolución dinámica de slugs (Avatar, Korra, sagas) y búsqueda en directorio.
  */
 async function getTioAnimeServers(slug, episodeNumber, audioKey) {
-  const cleanSlug = slug.replace(/-latino$/i, '');
-  const candidateSlugs = [];
+  const candidateSlugs = await resolveSlugCandidates(slug, audioKey);
 
-  if (audioKey === 'LAT') {
-    candidateSlugs.push(`${cleanSlug}-latino`, `${cleanSlug}-audio-latino`, slug);
-  } else {
-    candidateSlugs.push(slug, cleanSlug);
-  }
-
-  // Variaciones habituales de slugs en TioAnime
-  candidateSlugs.push(
-    cleanSlug.replace(/uu/g, 'u'),
-    cleanSlug.replace(/ou/g, 'o'),
-    cleanSlug.replace(/-tv/g, ''),
-    cleanSlug.replace(/-shippuuden/g, '-shippuden')
-  );
-
-  const uniqueCandidates = Array.from(new Set(candidateSlugs));
-
-  for (const s of uniqueCandidates) {
+  for (const s of candidateSlugs) {
     try {
       const url = `${TIO_BASE_URL}/ver/${s}-${episodeNumber}`;
       const { data } = await axios.get(url, {
@@ -258,8 +294,7 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
         let list = [];
         try {
           list = JSON.parse(match[1]);
-        } catch (jsonErr) {
-          console.warn(`Error al parsear JSON de videos en TioAnime para ${s}:`, jsonErr.message);
+        } catch (_) {
           continue;
         }
 
@@ -287,9 +322,61 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
         }
       }
     } catch (_) {
-      // Si falla una variación, continúa con la siguiente
+      // Continuar con siguiente candidato
     }
   }
+
+  // Búsqueda dinámica en directorio si ninguna variación directa funcionó
+  try {
+    const cleanSlug = slug.replace(/-latino$/i, '').toLowerCase();
+    const words = cleanSlug.split('-').filter((w) => w.length > 2 && !['the', 'and', 'book', 'season'].includes(w));
+    const searchQuery = words[0] || cleanSlug;
+    if (searchQuery) {
+      const dirUrl = `${TIO_BASE_URL}/directorio?q=${encodeURIComponent(searchQuery)}`;
+      const { data } = await axios.get(dirUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        timeout: 2500,
+      });
+
+      const $ = cheerio.load(data);
+      const dirSlugs = [];
+      $('.anime a').each((_, el) => {
+        const href = $(el).attr('href') || '';
+        if (href.startsWith('/anime/')) {
+          dirSlugs.push(href.replace('/anime/', ''));
+        }
+      });
+
+      for (const ds of dirSlugs.slice(0, 4)) {
+        if (candidateSlugs.includes(ds)) continue;
+        try {
+          const epUrl = `${TIO_BASE_URL}/ver/${ds}-${episodeNumber}`;
+          const epRes = await axios.get(epUrl, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            },
+            timeout: 2500,
+          });
+          const match = epRes.data?.match(/var videos = (\[[\s\S]*?\]);/);
+          if (match && match[1]) {
+            const list = JSON.parse(match[1]);
+            const results = list
+              .map((item) => {
+                const cleanUrl = extractCleanUrl(item[1]);
+                return cleanUrl ? { server: String(item[0] || 'TioStream'), url: cleanUrl } : null;
+              })
+              .filter(Boolean);
+            if (results.length > 0) return results;
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
 
   return [];
 }
@@ -298,18 +385,9 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
  * Motor 3 (Auxiliar / Respaldo): Extrae servidores reales desde JKAnime con decodificación Base64 estricta
  */
 async function getJkanimeServers(slug, episodeNumber, audioKey) {
-  const cleanSlug = slug.replace(/-latino$/i, '');
-  const candidateSlugs = [
-    slug,
-    cleanSlug,
-    cleanSlug.replace(/uu/g, 'u'),
-    cleanSlug.replace(/ou/g, 'o'),
-    cleanSlug.replace(/-shippuuden/g, '-shippuden'),
-    cleanSlug.replace(/-tv/g, ''),
-  ];
-  const uniqueCandidates = Array.from(new Set(candidateSlugs));
+  const candidateSlugs = await resolveSlugCandidates(slug, audioKey);
 
-  for (const s of uniqueCandidates) {
+  for (const s of candidateSlugs) {
     try {
       const url = `https://jkanime.net/${s}/${episodeNumber}/`;
       const { data } = await axios.get(url, {
@@ -328,8 +406,7 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
         let list = [];
         try {
           list = JSON.parse(match[1]);
-        } catch (jsonErr) {
-          console.warn(`Error parseando lista de servidores de JKAnime para ${s}:`, jsonErr.message);
+        } catch (_) {
           continue;
         }
 
@@ -348,8 +425,7 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
                 lang: Number(item.lang) || 1,
                 url: cleanUrl,
               };
-            } catch (b64Err) {
-              console.warn('Fallo al decodificar servidor en Base64:', b64Err.message);
+            } catch (_) {
               return null;
             }
           })
@@ -440,7 +516,7 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       return mapped;
     }
 
-    // 6. Servidores de respaldo únicamente si ninguna fuente externa respondió
+    // 6. Servidores de respaldo (9 proveedores) si ninguna fuente externa respondió
     const clean = String(slug || '').replace(/-latino$/i, '');
     const fallbacks = [
       {
@@ -461,6 +537,42 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
         originalServer: 'StreamWish',
         embedUrl: `https://embed.su/embed/anime/${clean}/${episodeNumber}`,
       },
+      {
+        id: 3,
+        name: 'Titán',
+        originalServer: 'SuperEmbed',
+        embedUrl: `https://multiembed.mov/?video_id=${clean}&s=1&e=${episodeNumber}`,
+      },
+      {
+        id: 4,
+        name: 'Fénix',
+        originalServer: 'AutoEmbed',
+        embedUrl: `https://player.autoembed.cc/embed/tv/${clean}/1/${episodeNumber}`,
+      },
+      {
+        id: 5,
+        name: 'Delta',
+        originalServer: 'VidLink',
+        embedUrl: `https://vidlink.pro/tv/${clean}/1/${episodeNumber}`,
+      },
+      {
+        id: 6,
+        name: 'Nova',
+        originalServer: '2Embed',
+        embedUrl: `https://www.2embed.cc/embedtv/${clean}&s=1&e=${episodeNumber}`,
+      },
+      {
+        id: 7,
+        name: 'Zenith',
+        originalServer: 'SmashyStream',
+        embedUrl: `https://player.smashystream.com/tv/${clean}/1/${episodeNumber}`,
+      },
+      {
+        id: 8,
+        name: 'Solar',
+        originalServer: 'Moviee',
+        embedUrl: `https://moviee.tv/embed/tv/${clean}/1/${episodeNumber}`,
+      },
     ];
 
     return fallbacks;
@@ -475,4 +587,5 @@ module.exports = {
   findLanguageSlugs,
   getEpisodeServers,
   extractCleanUrl,
+  resolveSlugCandidates,
 };
