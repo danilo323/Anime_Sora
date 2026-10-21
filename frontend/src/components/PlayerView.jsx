@@ -20,9 +20,9 @@ import { useLocalStorage } from '../hooks'
 const DEFAULT_SERVERS = [
   { name: 'Sora HD', desc: 'Principal · 1080p' },
   { name: 'Nube', desc: 'Rápido · 720p' },
+  { name: 'Espejo', desc: 'Respaldo · 720p' },
   { name: 'Titán', desc: 'Estable · 1080p' },
   { name: 'Fénix', desc: 'Alternativo · 720p' },
-  { name: 'Espejo', desc: 'Respaldo · 720p' },
   { name: 'Delta', desc: 'Respaldo · 480p' },
   { name: 'Nova', desc: 'Secundario · 720p' },
   { name: 'Zenith', desc: 'Auxiliar · 480p' },

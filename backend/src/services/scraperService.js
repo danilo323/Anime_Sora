@@ -8,13 +8,19 @@ const TIO_BASE_URL = 'https://tioanime.com';
 const UI_SERVER_NAMES = [
   'Sora HD',
   'Nube',
+  'Espejo',
   'Titán',
   'Fénix',
-  'Espejo',
   'Delta',
   'Nova',
   'Zenith',
   'Solar',
+  'Aura',
+  'Eclipse',
+  'Vórtice',
+  'Estrella',
+  'Cometa',
+  'Nebulosa',
 ];
 
 // Normaliza textos para comparar títulos con precisión
@@ -42,6 +48,59 @@ function slugifyTitle(title = '') {
       .replace(/^-+|-+$/g, '');
   } catch (_) {
     return 'anime';
+  }
+}
+
+/**
+ * Extrae la URL limpia (el src="..." o URL directa) usando expresiones regulares.
+ * Filtra formatos de iframe, URLs inválidas, vacías o enlaces de descarga no embebibles.
+ */
+function extractCleanUrl(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const str = raw.trim();
+  if (!str) return null;
+
+  // 1. Extraer URL de iframe si viene en tag HTML <iframe ... src="..." ...>
+  const iframeMatch = str.match(/<iframe\b[^>]*\bsrc=["']([^"']+)["']/i);
+  let url = iframeMatch && iframeMatch[1] ? iframeMatch[1].trim() : str;
+
+  // 2. Si viene con protocolo relativo //
+  if (url.startsWith('//')) {
+    url = `https:${url}`;
+  }
+
+  // 3. Extraer la URL limpia con regex de http(s)
+  const httpMatch = url.match(/https?:\/\/[^\s"'<>]+/i);
+  if (!httpMatch) return null;
+
+  url = httpMatch[0].trim();
+
+  // 4. Filtrar enlaces no válidos o incompatibles con reproductor iframe
+  if (
+    url.includes('mediafire.com') ||
+    url.includes('drive.google.com/uc') ||
+    url.endsWith('.rar') ||
+    url.endsWith('.zip') ||
+    url.includes('about:blank')
+  ) {
+    return null;
+  }
+
+  return url;
+}
+
+/**
+ * Normaliza una URL para detectar duplicados exactos
+ */
+function normalizeForDedup(url) {
+  try {
+    return url
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/\/+$/, '')
+      .replace(/[?&]token=[^&]+/, '');
+  } catch (_) {
+    return url;
   }
 }
 
@@ -95,7 +154,7 @@ async function findLanguageSlugs(query) {
 
 /**
  * Motor 1: Extrae servidores de video de AnimeFLV desde var videos = {"SUB": [...], "LAT": [...]}
- * Protegido contra cambios de ofuscación y fallos de cheerio.
+ * Extrae URLs o iframes mediante expresiones regulares.
  */
 async function getFlvServers(slug, episodeNumber, audioKey) {
   try {
@@ -139,15 +198,18 @@ async function getFlvServers(slug, episodeNumber, audioKey) {
     return selectedList
       .map((srv) => {
         try {
+          const rawUrl = srv.code || srv.url || '';
+          const cleanUrl = extractCleanUrl(rawUrl);
+          if (!cleanUrl) return null;
           return {
             server: srv.title || srv.server || 'FLV',
-            url: srv.code || srv.url || '',
+            url: cleanUrl,
           };
         } catch (_) {
           return null;
         }
       })
-      .filter((s) => s && s.url && typeof s.url === 'string' && s.url.startsWith('http'));
+      .filter(Boolean);
   } catch (err) {
     return [];
   }
@@ -155,7 +217,7 @@ async function getFlvServers(slug, episodeNumber, audioKey) {
 
 /**
  * Motor 2: Extrae servidores desde TioAnime (var videos = [["Server", "Url", ...], ...])
- * Con soporte para slugs limpios y doblaje latino.
+ * Extrae URLs limpias de iframes con soporte para slugs en japonés y doblaje latino.
  */
 async function getTioAnimeServers(slug, episodeNumber, audioKey) {
   const cleanSlug = slug.replace(/-latino$/i, '');
@@ -209,11 +271,11 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
               if (!Array.isArray(item) || item.length < 2) return null;
               const server = String(item[0] || 'TioStream');
               const rawUrl = String(item[1] || '').trim();
+              const cleanUrl = extractCleanUrl(rawUrl);
 
-              if (!rawUrl || !rawUrl.startsWith('http')) return null;
-              if (rawUrl.includes('mediafire.com')) return null;
+              if (!cleanUrl) return null;
 
-              return { server, url: rawUrl };
+              return { server, url: cleanUrl };
             } catch (_) {
               return null;
             }
@@ -233,7 +295,7 @@ async function getTioAnimeServers(slug, episodeNumber, audioKey) {
 }
 
 /**
- * Motor 3 (Alternativo / Respaldo): Extrae servidores reales desde JKAnime con decodificación Base64 estricta
+ * Motor 3 (Auxiliar / Respaldo): Extrae servidores reales desde JKAnime con decodificación Base64 estricta
  */
 async function getJkanimeServers(slug, episodeNumber, audioKey) {
   const cleanSlug = slug.replace(/-latino$/i, '');
@@ -278,13 +340,13 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
             try {
               if (!item || !item.remote || typeof item.remote !== 'string') return null;
               const decoded = Buffer.from(item.remote.trim(), 'base64').toString('utf8').trim();
-              if (!decoded || !decoded.startsWith('http')) return null;
-              if (decoded.includes('mediafire.com')) return null;
+              const cleanUrl = extractCleanUrl(decoded);
+              if (!cleanUrl) return null;
 
               return {
                 server: item.server || 'JKStream',
                 lang: Number(item.lang) || 1,
-                url: decoded,
+                url: cleanUrl,
               };
             } catch (b64Err) {
               console.warn('Fallo al decodificar servidor en Base64:', b64Err.message);
@@ -310,13 +372,13 @@ async function getJkanimeServers(slug, episodeNumber, audioKey) {
 }
 
 /**
- * Multi-Scraper Inteligente:
- * 1. Ejecuta en paralelo AnimeFLV, TioAnime y JKAnime con try/catch independientes.
- * 2. Combina los arreglos de todas las fuentes disponibles.
- * 3. Filtra enlaces repetidos, caídos o no embebibles.
- * 4. Mapea la lista combinada a los 9 nombres de la interfaz:
- *    ['Sora HD', 'Nube', 'Titán', 'Fénix', 'Espejo', 'Delta', 'Nova', 'Zenith', 'Solar']
- * 5. Devuelve hasta 9 servidores limpios (.slice(0, 9)).
+ * Rastreo Dinámico de Reproductores en Tiempo Real:
+ * 1. Lanza peticiones concurrentes a múltiples fuentes mediante Promise.allSettled.
+ * 2. Recopila todos los iframes o URLs encontradas en las fuentes.
+ * 3. Extrae la URL limpia (el src="...") usando expresiones regulares.
+ * 4. Elimina enlaces duplicados y URLs inválidas o vacías.
+ * 5. Mapea los resultados dinámicamente según el tamaño real del arreglo (sin longitud fija forzada).
+ *    Si encuentra 2 devuelve 2; si encuentra 8 devuelve 8.
  */
 async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
   try {
@@ -326,13 +388,14 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       if (cached) return cached;
     }
 
-    // 1 & 2. Ejecutar motores en paralelo con Promise.allSettled y try/catch independientes
+    // 1. Peticiones concurrentes a las fuentes de streaming mediante Promise.allSettled
     const [flvResult, tioResult, jkResult] = await Promise.allSettled([
       getFlvServers(slug, episodeNumber, audioKey),
       getTioAnimeServers(slug, episodeNumber, audioKey),
       getJkanimeServers(slug, episodeNumber, audioKey),
     ]);
 
+    // 2. Recopilar todos los servidores/iframes encontrados
     const flvServers =
       flvResult.status === 'fulfilled' && Array.isArray(flvResult.value) ? flvResult.value : [];
     const tioServers =
@@ -340,50 +403,30 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
     const jkServers =
       jkResult.status === 'fulfilled' && Array.isArray(jkResult.value) ? jkResult.value : [];
 
-    // 3. Combinar arreglos respetando orden de prioridad
-    const combined = [...flvServers, ...tioServers, ...jkServers];
+    const rawCombined = [...flvServers, ...tioServers, ...jkServers];
 
-    // 4. Filtrar duplicados, enlaces no seguros o no embebibles
+    // 3 & 4. Extraer URLs limpias mediante regex, filtrar inválidas/vacías y eliminar duplicados
     const seenUrls = new Set();
     const cleanServers = [];
 
-    for (const item of combined) {
-      if (!item || !item.url || typeof item.url !== 'string') continue;
+    for (const item of rawCombined) {
+      if (!item) continue;
+      const cleanUrl = extractCleanUrl(item.url || item.code || '');
+      if (!cleanUrl) continue;
 
-      const url = item.url.trim();
-
-      // Debe ser URL http(s)
-      if (!url.startsWith('http://') && !url.startsWith('https://')) continue;
-
-      // Descartar descargas o enlaces incompatibles con iframe
-      if (
-        url.includes('mediafire.com') ||
-        url.includes('drive.google.com/uc') ||
-        url.endsWith('.rar') ||
-        url.endsWith('.zip')
-      ) {
-        continue;
-      }
-
-      // Clave normalizada para deduplicar
-      const normKey = url
-        .toLowerCase()
-        .replace(/^https?:\/\//, '')
-        .replace(/\/+$/, '')
-        .replace(/[?&]token=[^&]+/, '');
-
+      const normKey = normalizeForDedup(cleanUrl);
       if (seenUrls.has(normKey)) continue;
       seenUrls.add(normKey);
 
       cleanServers.push({
         server: item.server || 'Directo',
-        url,
+        url: cleanUrl,
       });
     }
 
-    // 5. Mapear a los 9 nombres de la interfaz y tomar hasta 9
+    // 5. Mapeo dinámico: no forzar longitud fija, iterar sobre el tamaño real del arreglo
     if (cleanServers.length > 0) {
-      const mapped = cleanServers.slice(0, 9).map((srv, idx) => ({
+      const mapped = cleanServers.map((srv, idx) => ({
         id: idx,
         name: UI_SERVER_NAMES[idx] || `Servidor ${idx + 1}`,
         originalServer: srv.server,
@@ -391,13 +434,13 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       }));
 
       if (memoryCache && memoryCache.set) {
-        memoryCache.set(cacheKey, mapped, 2 * 60 * 60); // 2 horas en caché
+        memoryCache.set(cacheKey, mapped, 2 * 60 * 60); // 2 horas de caché
       }
 
       return mapped;
     }
 
-    // 6. Servidores de respaldo si ninguna fuente respondió
+    // 6. Servidores de respaldo únicamente si ninguna fuente externa respondió
     const clean = String(slug || '').replace(/-latino$/i, '');
     const fallbacks = [
       {
@@ -414,7 +457,7 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       },
       {
         id: 2,
-        name: 'Titán',
+        name: 'Espejo',
         originalServer: 'StreamWish',
         embedUrl: `https://embed.su/embed/anime/${clean}/${episodeNumber}`,
       },
@@ -431,4 +474,5 @@ module.exports = {
   slugifyTitle,
   findLanguageSlugs,
   getEpisodeServers,
+  extractCleanUrl,
 };
