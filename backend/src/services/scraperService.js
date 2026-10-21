@@ -429,7 +429,44 @@ function setCached(key, data) {
 }
 
 /**
- * Función principal: Extrae servidores en ESPAÑOL garantizado
+ * Obtiene el estado de emisión y el último episodio disponible para animes en emisión
+ */
+async function getAnimeAiringInfo(slug) {
+  const cacheKey = `airing_info:${slug}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+
+  const candidateSlugs = getUniversalSlugVariations(slug);
+  for (const s of candidateSlugs) {
+    try {
+      const url = `${TIO_BASE_URL}/anime/${s}`;
+      const { data } = await axios.get(url, { headers: HEADERS, timeout: 2500 });
+      if (typeof data !== 'string') continue;
+
+      const match = data.match(/var episodes = (\[[\s\S]*?\]);/);
+      if (match && match[1]) {
+        const eps = JSON.parse(match[1]);
+        const maxEp = eps.length > 0 ? Math.max(...eps) : null;
+        const isEmision = data.toLowerCase().includes('en emision') || data.toLowerCase().includes('en emisión');
+        const info = {
+          slug: s,
+          isAiring: isEmision,
+          status: isEmision ? 'En emisión' : 'Finalizado',
+          maxEpisode: maxEp,
+          availableEpisodes: eps,
+          totalAvailable: eps.length,
+        };
+        setCached(cacheKey, info);
+        return info;
+      }
+    } catch (_) {}
+  }
+
+  return { isAiring: false, status: 'Desconocido', maxEpisode: null, totalAvailable: 0 };
+}
+
+/**
+ * Función principal: Extrae servidores en ESPAÑOL garantizado y verifica estado de emisión
  */
 async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
   const epNum = Number(episodeNumber) || 1;
@@ -438,6 +475,26 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
   if (cached) return cached;
 
   try {
+    // 0. Comprobar información de emisión de la serie
+    const airingInfo = await getAnimeAiringInfo(slug);
+
+    // Si el anime está en emisión y el usuario pide un episodio superior al emitido
+    if (airingInfo.isAiring && airingInfo.maxEpisode && epNum > airingInfo.maxEpisode) {
+      const unairedPayload = {
+        sources: [],
+        servers: [],
+        subtitles: [],
+        headers: {},
+        isAiring: true,
+        hasAired: false,
+        maxEpisode: airingInfo.maxEpisode,
+        status: 'En emisión',
+        message: `El episodio ${epNum} aún no ha sido emitido. El último episodio emitido es el ${airingInfo.maxEpisode}.`,
+      };
+      setCached(cacheKey, unairedPayload);
+      return unairedPayload;
+    }
+
     // 1. Peticiones concurrentes a fuentes en español
     const [tioResult, jkResult, flvResult] = await Promise.allSettled([
       getTioAnimeServers(slug, epNum, audioKey),
@@ -501,10 +558,29 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
         servers: mapped,
         subtitles: [],
         headers: {},
+        isAiring: airingInfo.isAiring,
+        hasAired: true,
+        maxEpisode: airingInfo.maxEpisode,
+        status: airingInfo.status,
       };
 
       setCached(cacheKey, payload);
       return payload;
+    }
+
+    // Si el anime está en emisión y no se encontró el episodio, no enviar enlaces rotos
+    if (airingInfo.isAiring) {
+      return {
+        sources: [],
+        servers: [],
+        subtitles: [],
+        headers: {},
+        isAiring: true,
+        hasAired: false,
+        maxEpisode: airingInfo.maxEpisode,
+        status: 'En emisión',
+        message: `El episodio ${epNum} aún no está disponible. La serie se encuentra en emisión (último disponible: ${airingInfo.maxEpisode || 1}).`,
+      };
     }
 
     // 4. Servidores de respaldo universales si no se encontró en los motores principales
@@ -550,15 +626,20 @@ async function getEpisodeServers(slug, episodeNumber, audioKey = 'SUB') {
       servers: fallbacks,
       subtitles: [],
       headers: {},
+      isAiring: false,
+      hasAired: true,
+      maxEpisode: null,
+      status: 'Finalizado',
     };
   } catch (err) {
     console.error('Error en getEpisodeServers:', err.message);
-    return { sources: [], servers: [], subtitles: [], headers: {} };
+    return { sources: [], servers: [], subtitles: [], headers: {}, hasAired: false };
   }
 }
 
 module.exports = {
   slugifyTitle,
   getEpisodeServers,
+  getAnimeAiringInfo,
   calculateSimilarity,
 };

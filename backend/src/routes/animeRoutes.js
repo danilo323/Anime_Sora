@@ -14,6 +14,7 @@ const {
   getAnimeRecommendations,
   getEpisodeStream,
   getEpisodesThumbnails,
+  getAiringStatus,
 } = require('../controllers/streamController');
 
 // Rutas de Bóveda Privada
@@ -27,6 +28,7 @@ router.get('/search', searchAnimeCards);
 router.get('/anime/:id', getAnimeById);
 router.get('/anime/:id/recommendations', getAnimeRecommendations);
 router.get('/anime/:id/episodes-thumbnails', getEpisodesThumbnails);
+router.get('/anime/:slug/airing', getAiringStatus);
 
 // Endpoint de episodios (migrará a Jellyfin en Fase 3)
 router.get('/episode/:slug/:ep', getEpisodeStream);

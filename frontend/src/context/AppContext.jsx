@@ -307,10 +307,17 @@ export function useApp() {
   return ctx
 }
 
-/** Episodios ordenados de un anime (sin límite artificial de 24). */
+/** Episodios ordenados de un anime con soporte dinámico para animes en emisión. */
 // eslint-disable-next-line react-refresh/only-export-components
-export function episodeList(item) {
+export function episodeList(item, maxEp = null) {
   if (!item) return []
-  const count = item.episodes ? Math.max(1, Number(item.episodes) || 1) : 1
+  let count = 1
+  if (maxEp && Number(maxEp) > 0) {
+    count = Math.max(count, Number(maxEp))
+  } else if (item.maxEpisode && Number(item.maxEpisode) > 0) {
+    count = Math.max(count, Number(item.maxEpisode))
+  } else if (item.episodes && Number(item.episodes) > 0) {
+    count = Math.max(count, Number(item.episodes))
+  }
   return Array.from({ length: count }, (_, i) => i + 1)
 }

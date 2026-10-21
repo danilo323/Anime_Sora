@@ -148,6 +148,15 @@ function formatAnimeItem(item) {
   const title = item.title || item.title_english || 'Anime';
   const slug = slugifyTitle(title);
 
+  const isAiring = Boolean(
+    item.airing || item.status === 'Currently Airing' || item.status === 'current'
+  );
+  const status = isAiring
+    ? 'En emisión'
+    : item.status === 'Not yet aired' || item.status === 'upcoming'
+    ? 'Por estrenar'
+    : 'Finalizado';
+
   return {
     id: mal_id ? String(mal_id) : `anime-${Date.now()}`,
     mal_id,
@@ -163,6 +172,8 @@ function formatAnimeItem(item) {
     type: item.type === 'Movie' ? 'Película' : 'Serie',
     genres,
     synopsis: item.synopsis || 'Sinopsis no disponible.',
+    status,
+    isAiring,
   };
 }
 
@@ -229,6 +240,13 @@ async function fallbackKitsuSearch(query, limit = 12) {
         type: attr.subtype === 'movie' ? 'Película' : 'Serie',
         genres,
         synopsis: attr.synopsis || 'Sinopsis no disponible.',
+        status:
+          attr.status === 'current'
+            ? 'En emisión'
+            : attr.status === 'upcoming'
+            ? 'Por estrenar'
+            : 'Finalizado',
+        isAiring: attr.status === 'current',
       };
     });
   } catch (err) {
@@ -298,6 +316,13 @@ async function fallbackKitsuTop(limit = 10, type = null) {
         type: attr.subtype === 'movie' ? 'Película' : 'Serie',
         genres,
         synopsis: attr.synopsis || 'Sinopsis no disponible.',
+        status:
+          attr.status === 'current'
+            ? 'En emisión'
+            : attr.status === 'upcoming'
+            ? 'Por estrenar'
+            : 'Finalizado',
+        isAiring: attr.status === 'current',
       };
     });
   } catch (err) {
@@ -619,12 +644,22 @@ async function getAnimeEpisodesThumbnails({ id, title, limit = 50, offset = 0 })
           attr.thumbnail?.original ||
           attr.thumbnail?.tiny ||
           null;
+        const airdate = attr.airdate || null;
+        let hasAired = true;
+        if (airdate) {
+          try {
+            hasAired = new Date(airdate) <= new Date();
+          } catch (_) {}
+        }
         formatted.push({
           number: attr.number,
-          title: attr.canonicalTitle || (attr.titles?.en || attr.titles?.en_jp || `Episodio ${attr.number}`),
+          title:
+            attr.canonicalTitle ||
+            (attr.titles?.en || attr.titles?.en_jp || `Episodio ${attr.number}`),
           thumbnail: thumb,
           synopsis: attr.synopsis || null,
-          airdate: attr.airdate || null,
+          airdate,
+          hasAired,
         });
       }
     }

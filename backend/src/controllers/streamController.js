@@ -5,7 +5,7 @@ const {
   getRecommendationsMetadata,
   getAnimeEpisodesThumbnails,
 } = require('../services/jikanService');
-const { getEpisodeServers } = require('../services/scraperService');
+const { getEpisodeServers, getAnimeAiringInfo } = require('../services/scraperService');
 
 /**
  * GET /api/search?q=nombre
@@ -75,7 +75,7 @@ async function getAnimeRecommendations(req, res) {
 
 /**
  * GET /api/episode/:slug/:ep?audioKey=SUB|LAT
- * Devuelve directamente las fuentes de video (.m3u8 / .mp4), calidades y subtítulos vía @consumet/extensions
+ * Devuelve directamente las fuentes de video (.m3u8 / .mp4), calidades y subtítulos con soporte para animes en emisión
  */
 async function getEpisodeStream(req, res) {
   const { slug, ep } = req.params;
@@ -90,10 +90,29 @@ async function getEpisodeStream(req, res) {
       subtitles: data?.subtitles || [],
       headers: data?.headers || {},
       servers: data?.servers || [],
+      isAiring: Boolean(data?.isAiring),
+      hasAired: data?.hasAired !== false,
+      maxEpisode: data?.maxEpisode || null,
+      status: data?.status || null,
+      message: data?.message || null,
     });
   } catch (error) {
     console.error(`Error en getEpisodeStream para ${slug} ep ${ep}:`, error.message);
     res.status(500).json({ error: 'Error al obtener fuentes de video' });
+  }
+}
+
+/**
+ * GET /api/anime/:slug/airing
+ * Devuelve información de emisión en tiempo real (último episodio emitido y estado)
+ */
+async function getAiringStatus(req, res) {
+  const { slug } = req.params;
+  try {
+    const info = await getAnimeAiringInfo(slug);
+    res.json(info);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 }
 
@@ -123,4 +142,5 @@ module.exports = {
   getAnimeRecommendations,
   getEpisodeStream,
   getEpisodesThumbnails,
+  getAiringStatus,
 };

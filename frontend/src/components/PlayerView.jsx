@@ -17,6 +17,9 @@ import {
   X,
   RotateCcw,
   Sparkles,
+  Radio,
+  Clock,
+  AlertCircle,
 } from 'lucide-react'
 import axios from 'axios'
 import { useApp, episodeList, API_BASE } from '../context/AppContext'
@@ -34,11 +37,6 @@ export default function PlayerView() {
 function PlayerSession({ item, episode }) {
   const { closePlayer, play, toggleFavorite, isFavorite } = useApp()
 
-  const episodes = useMemo(() => episodeList(item), [item])
-  const epIdx = episodes.indexOf(episode)
-  const prevEp = epIdx > 0 ? episodes[epIdx - 1] : null
-  const nextEp = epIdx >= 0 && epIdx < episodes.length - 1 ? episodes[epIdx + 1] : null
-
   const resolvedSlug = useMemo(() => {
     if (item?.slug) return item.slug
     if (!item?.title) return ''
@@ -49,6 +47,39 @@ function PlayerSession({ item, episode }) {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
   }, [item?.slug, item?.title])
+
+  // Estado de emisión en tiempo real (para animes en emisión)
+  const [airingInfo, setAiringInfo] = useState(null)
+  const [unairedState, setUnairedState] = useState(null)
+
+  // Consulta el estado de emisión al abrir la serie
+  useEffect(() => {
+    if (!resolvedSlug) return
+    let alive = true
+    axios
+      .get(`${API_BASE}/anime/${encodeURIComponent(resolvedSlug)}/airing`, { timeout: 3500 })
+      .then((res) => {
+        if (!alive || !res.data) return
+        setAiringInfo(res.data)
+      })
+      .catch(() => {})
+
+    return () => {
+      alive = false
+    }
+  }, [resolvedSlug])
+
+  // Lista de episodios ajustada si el anime está en emisión
+  const episodes = useMemo(() => {
+    const planned = item?.episodes ? Number(item.episodes) : 0
+    const maxAired = airingInfo?.maxEpisode ? Number(airingInfo.maxEpisode) : 0
+    const count = Math.max(planned || 1, maxAired || 1, episode || 1)
+    return Array.from({ length: count }, (_, i) => i + 1)
+  }, [item?.episodes, airingInfo?.maxEpisode, episode])
+
+  const epIdx = episodes.indexOf(episode)
+  const prevEp = epIdx > 0 ? episodes[epIdx - 1] : null
+  const nextEp = epIdx >= 0 && epIdx < episodes.length - 1 ? episodes[epIdx + 1] : null
 
   // Datos de servidores y fuentes en español
   const [sources, setSources] = useState([])
@@ -96,6 +127,7 @@ function PlayerSession({ item, episode }) {
               thumb: ep.thumbnail,
               title: ep.title,
               synopsis: ep.synopsis,
+              hasAired: ep.hasAired !== false,
             }
           }
         }
@@ -123,6 +155,7 @@ function PlayerSession({ item, episode }) {
       setSources([])
       setServers([])
       setSubtitles([])
+      setUnairedState(null)
       setLoading(false)
       return
     }
@@ -133,6 +166,7 @@ function PlayerSession({ item, episode }) {
     setSources([])
     setServers([])
     setSubtitles([])
+    setUnairedState(null)
     setServerIdx(0)
     setLoading(true)
     setStreamError(null)
@@ -158,10 +192,24 @@ function PlayerSession({ item, episode }) {
         timeout: 9000,
       })
       .then((res) => {
+        // Manejar episodios no emitidos de animes en emisión
+        if (res.data?.hasAired === false || (res.data?.isAiring && !res.data?.servers?.length)) {
+          setUnairedState({
+            isAiring: true,
+            maxEpisode: res.data?.maxEpisode || airingInfo?.maxEpisode,
+            message: res.data?.message,
+          })
+          setSources([])
+          setServers([])
+          setSubtitles([])
+          return
+        }
+
         const srcList = res.data?.sources || []
         const srvList = res.data?.servers || []
         const subList = res.data?.subtitles || []
 
+        setUnairedState(null)
         setSources(srcList)
         setServers(srvList)
         setSubtitles(subList)
@@ -186,7 +234,7 @@ function PlayerSession({ item, episode }) {
         hlsRef.current = null
       }
     }
-  }, [resolvedSlug, episode, item?.audioKey])
+  }, [resolvedSlug, episode, item?.audioKey, airingInfo?.maxEpisode])
 
   // Ajustar rango cuando cambia el episodio activo
   useEffect(() => {
@@ -388,10 +436,19 @@ function PlayerSession({ item, episode }) {
             <X className="size-4.5" />
           </button>
           <div className="min-w-0">
-            <h1 className="text-sm font-semibold truncate text-white">{item?.title || 'Sora Anime'}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-semibold truncate text-white">{item?.title || 'Sora Anime'}</h1>
+              {airingInfo?.isAiring && (
+                <span className="flex-none inline-flex items-center gap-1 rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold text-amber-300 uppercase tracking-wider">
+                  <Radio className="size-2.5 text-amber-400 animate-pulse" />
+                  En emisión
+                </span>
+              )}
+            </div>
             <p className="text-xs text-white/60 truncate">
               Episodio {episode} {item?.episodes ? `de ${item.episodes}` : ''} ·{' '}
               {item?.audioKey === 'LAT' ? 'Español Latino 🇲🇽' : 'Sub Español 🇯🇵'}
+              {airingInfo?.maxEpisode ? ` · (Último emitido: Ep ${airingInfo.maxEpisode})` : ''}
             </p>
           </div>
         </div>
@@ -414,7 +471,7 @@ function PlayerSession({ item, episode }) {
 
       {/* 2. Cuerpo principal: Contenedor de Video a la izquierda y Episodios a la derecha */}
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 relative overflow-hidden">
-        {/* Columna Izquierda: Reproductor Híbrido (Nativo HLS / Embed Blindado sin redirecciones) */}
+        {/* Columna Izquierda: Reproductor Híbrido (Nativo HLS / Embed Blindado sin redirecciones / Pantalla de En Emisión) */}
         <section className="flex-1 flex flex-col min-w-0 h-full bg-black relative">
           <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden">
             {loading ? (
@@ -422,8 +479,37 @@ function PlayerSession({ item, episode }) {
                 <span className="size-12 animate-spin rounded-full border-4 border-brand-500/30 border-t-brand-500" />
                 <b className="text-base font-semibold">Cargando Episodio {episode} en Español…</b>
                 <p className="text-xs text-white/60 max-w-xs">
-                  Sincronizando servidores en alta resolución en tiempo real.
+                  Sincronizando servidores y estado de emisión en tiempo real.
                 </p>
+              </div>
+            ) : unairedState ? (
+              /* Pantalla amigable cuando se elige un episodio que aún no se ha emitido */
+              <div className="flex flex-col items-center justify-center gap-4 text-center p-8 max-w-lg mx-auto bg-navy-900/90 rounded-2xl border border-amber-500/30 backdrop-blur-md shadow-2xl animate-fade-in m-4">
+                <div className="grid size-16 place-items-center rounded-full bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/30">
+                  <Radio className="size-8 animate-pulse" />
+                </div>
+                <div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-3 py-1 text-xs font-bold text-amber-300 uppercase tracking-wider">
+                    <span className="size-2 rounded-full bg-amber-400 animate-ping" />
+                    Anime en Emisión
+                  </span>
+                  <h2 className="mt-3 text-lg sm:text-xl font-bold text-white">
+                    Episodio {episode} aún no emitido
+                  </h2>
+                  <p className="mt-2 text-xs sm:text-sm text-white/70 leading-relaxed">
+                    {unairedState.message ||
+                      `Este capítulo aún no ha sido transmitido en televisión o plataformas oficiales en Japón. El último capítulo disponible es el Episodio ${unairedState.maxEpisode || 1}.`}
+                  </p>
+                </div>
+                {unairedState.maxEpisode && unairedState.maxEpisode !== episode && (
+                  <button
+                    onClick={() => play(item, unairedState.maxEpisode)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-brand-600 hover:bg-brand-500 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-lg transition active:scale-95"
+                  >
+                    <Play className="size-4 fill-white" />
+                    Ver último disponible (Episodio {unairedState.maxEpisode})
+                  </button>
+                )}
               </div>
             ) : isDirectStream ? (
               <div className="relative size-full flex items-center justify-center bg-black">
@@ -490,16 +576,23 @@ function PlayerSession({ item, episode }) {
                     <Tv className="size-3" /> Stream Nativo HLS
                   </span>
                 )}
+                {unairedState && (
+                  <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                    <Clock className="size-3 text-amber-400" /> Próximamente
+                  </span>
+                )}
               </div>
               <div className="mt-1 h-0.5 w-16 bg-amber-500 rounded-full" />
               <span className="mt-1 block text-[11px] text-white/60">
-                {curServer?.desc || (item?.audioKey === 'LAT' ? 'Audio en Español Latino' : 'Subtitulado en Español')}
+                {unairedState
+                  ? `Serie en emisión · Último capítulo disponible: Ep ${unairedState.maxEpisode || 1}`
+                  : curServer?.desc || (item?.audioKey === 'LAT' ? 'Audio en Español Latino' : 'Subtitulado en Español')}
               </span>
             </div>
 
             {/* Selector de servidores (Sora HD, Nube, Espejo...) con etiquetas de resolución */}
             <div className="flex items-center gap-2 max-w-full">
-              {servers.length > 0 && (
+              {servers.length > 0 && !unairedState && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-white/50 hidden xl:inline flex-none">Servidores:</span>
                   <div className="flex items-center gap-1 overflow-x-auto max-w-[280px] sm:max-w-md lg:max-w-lg xl:max-w-xl rounded-xl bg-white/5 p-1 ring-1 ring-white/10 scrollbar-none">
@@ -656,6 +749,11 @@ function PlayerSession({ item, episode }) {
                 visibleEpisodes.map((num) => {
                   const isActive = num === episode
                   const isWatched = Boolean(watchedEpisodes[num])
+                  const isUnairedEp = Boolean(
+                    (airingInfo?.isAiring && airingInfo?.maxEpisode && num > airingInfo.maxEpisode) ||
+                    (episodesMeta[num] && episodesMeta[num].hasAired === false)
+                  )
+
                   return (
                     <button
                       key={num}
@@ -664,6 +762,8 @@ function PlayerSession({ item, episode }) {
                       className={`group w-full flex items-center gap-3 rounded-xl p-2 text-left transition duration-150 ${
                         isActive
                           ? 'bg-brand-600 text-white shadow-lg shadow-brand-600/30 ring-1 ring-brand-400'
+                          : isUnairedEp
+                          ? 'bg-white/[0.02] hover:bg-white/[0.05] text-white/50 border border-white/5'
                           : 'bg-white/[0.04] hover:bg-white/[0.08] text-white/80 hover:text-white border border-white/5'
                       }`}
                     >
@@ -673,7 +773,11 @@ function PlayerSession({ item, episode }) {
                           src={episodesMeta[num]?.thumb || item?.poster || item?.image}
                           alt={`Episodio ${num}`}
                           className={`size-full object-cover transition duration-300 ${
-                            isActive ? 'opacity-90 scale-105' : 'opacity-70 group-hover:opacity-90 group-hover:scale-105'
+                            isActive
+                              ? 'opacity-90 scale-105'
+                              : isUnairedEp
+                              ? 'opacity-40 grayscale-[50%]'
+                              : 'opacity-70 group-hover:opacity-90 group-hover:scale-105'
                           }`}
                           loading="lazy"
                         />
@@ -685,6 +789,10 @@ function PlayerSession({ item, episode }) {
                           <span className="absolute inset-0 grid place-items-center bg-brand-600/35">
                             <Play className="size-4 fill-white text-white drop-shadow" />
                           </span>
+                        ) : isUnairedEp ? (
+                          <span className="absolute inset-0 grid place-items-center bg-black/40">
+                            <Clock className="size-3.5 text-amber-400 drop-shadow" />
+                          </span>
                         ) : (
                           <span className="absolute inset-0 grid place-items-center opacity-0 group-hover:opacity-100 transition">
                             <Play className="size-3.5 fill-white text-white drop-shadow" />
@@ -695,12 +803,17 @@ function PlayerSession({ item, episode }) {
                       {/* Información del episodio */}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-1">
-                          <b className={`text-xs font-bold truncate ${isActive ? 'text-white' : 'text-sky-400'}`}>
+                          <b className={`text-xs font-bold truncate ${isActive ? 'text-white' : isUnairedEp ? 'text-white/60' : 'text-sky-400'}`}>
                             Episodio {num}
                           </b>
                           {isActive ? (
                             <span className="flex-none rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-bold text-white uppercase tracking-wider">
                               Reproduciendo
+                            </span>
+                          ) : isUnairedEp ? (
+                            <span className="flex-none rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 px-1.5 py-0.5 text-[9px] font-semibold flex items-center gap-1">
+                              <Clock className="size-2.5" />
+                              Próximamente
                             </span>
                           ) : isWatched ? (
                             <span className="flex-none text-[10px] text-emerald-400 font-medium">
@@ -708,12 +821,11 @@ function PlayerSession({ item, episode }) {
                             </span>
                           ) : null}
                         </div>
-                        <p className={`mt-0.5 truncate text-[11px] ${isActive ? 'text-white/85' : 'text-white/60'}`}>
+                        <p className={`mt-0.5 truncate text-[11px] ${isActive ? 'text-white/85' : isUnairedEp ? 'text-white/40' : 'text-white/60'}`}>
                           {episodesMeta[num]?.title || item?.title || 'Anime'}
                         </p>
                         <span className={`mt-1 block text-[10px] ${isActive ? 'text-white/70' : 'text-white/40'}`}>
-                          {item?.year ? `${item.year} · ` : ''}
-                          {item?.audioKey === 'LAT' ? 'Audio Latino' : 'Subtitulado'}
+                          {isUnairedEp ? 'Por emitir' : item?.audioKey === 'LAT' ? 'Audio Latino' : 'Subtitulado'}
                         </span>
                       </div>
                     </button>
